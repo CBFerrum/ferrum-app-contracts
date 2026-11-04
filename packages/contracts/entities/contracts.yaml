@@ -1,0 +1,90 @@
+- name: ContractSettings
+  label: Contract Settings
+  kind: settings
+  module: contracts
+  description: "When a contract needs approval, and who signs for the organisation."
+  fields:
+    - {name: approval_threshold, type: currency, default: 10000, description: "Contracts worth this much or more are approved by a Contract Approver first"}
+    - {name: signatory_name, type: data, required: true, description: "Who signs contracts for the organisation"}
+    - {name: signatory_email, type: email, required: true}
+  form:
+    - {label: Approval, fields: [approval_threshold]}
+    - {label: Signing, fields: [signatory_name, signatory_email]}
+
+- name: Clause
+  label: Clause
+  label_plural: Clause Library
+  kind: master
+  module: contracts
+  title_field: clause_name
+  description: Wording approved for use in contracts.
+  fields:
+    - {name: clause_name, type: data, required: true, unique: true, in_list: true}
+    - {name: category, type: select, options: [Payment, Liability, Confidentiality, Termination, Data Protection, Intellectual Property, Other], default: Other, in_list: true, in_filter: true}
+    - {name: text, type: markdown, required: true}
+    - {name: approved, type: check, in_list: true, in_filter: true}
+  list: {columns: [clause_name, category, approved], sort: clause_name asc}
+
+- name: ContractClause
+  label: Clause
+  kind: child
+  fields:
+    - {name: clause, type: link, to: Clause, required: true, in_list: true}
+    - {name: text, type: markdown, read_only: true, description: "The clause's wording when the contract was drafted"}
+
+- name: Contract
+  label: Contract
+  label_plural: Contracts
+  kind: master
+  module: contracts
+  title_field: title
+  description: An agreement from draft to signature and through its term. Its terms are kept once it leaves its draft.
+  fields:
+    - {name: title, type: data, required: true, in_list: true}
+    - {name: contract_type, type: select, options: [Sales, Purchase, Service, Non-Disclosure, Employment, Lease, Other], default: Service, in_list: true, in_filter: true}
+    - {name: counterparty_name, type: data, required: true, in_list: true, label: Counterparty}
+    - {name: counterparty_email, type: email}
+    - {name: owner, type: email, read_only: true, no_copy: true, in_list: true, in_filter: true}
+    - {name: value, type: currency, default: 0, in_list: true}
+    - {name: starts_on, type: date, required: true, in_list: true}
+    - {name: ends_on, type: date, required: true, in_list: true}
+    - {name: auto_renew, type: check}
+    - {name: renewal_months, type: int, default: 12}
+    - {name: notice_days, type: int, default: 30, description: "Days before the end by which notice not to renew is given"}
+    - {name: clauses, type: table, of: ContractClause}
+    - {name: document, type: attach, description: "The PDF to sign"}
+    - {name: status, type: select, options: [Draft, In Review, Approved, Out for Signature, Signed, Active, Expired, Terminated], default: Draft, read_only: true, no_copy: true, in_list: true, in_filter: true}
+    - {name: approved_by, type: email, read_only: true, no_copy: true}
+    - {name: decision_note, type: text, read_only: true, no_copy: true}
+    - {name: sign_request, type: link, to: SignRequest, read_only: true, no_copy: true}
+    - {name: signed_document, type: attach, read_only: true, no_copy: true}
+    - {name: signed_on, type: date, read_only: true, no_copy: true}
+    - {name: renewals, type: int, read_only: true, no_copy: true, default: 0}
+    - {name: notice_due, type: check, read_only: true, no_copy: true, in_filter: true, description: "Inside the notice period of a contract that renews by itself"}
+    - {name: terminated_on, type: date, read_only: true, no_copy: true}
+    - {name: termination_reason, type: text, read_only: true, no_copy: true}
+  actions:
+    - {name: submit_contract, label: Submit It, permission: write, condition: "doc.status == 'Draft'"}
+    - {name: approve_contract, label: Approve It, permission: write, condition: "doc.status == 'In Review'"}
+    - {name: reject_contract, label: Send It Back, permission: write, condition: "doc.status == 'In Review'", params: [{name: note, type: text, label: Why, required: true}]}
+    - {name: send_for_signature, label: Send for Signature, permission: write, condition: "doc.status == 'Approved'"}
+    - {name: terminate_contract, label: Terminate It, permission: write, condition: "doc.status == 'Signed' || doc.status == 'Active'", params: [{name: reason, type: text, label: Why, required: true}]}
+  numbering: {template: "CTR-{YYYY}-{seq:5}"}
+  list: {columns: [number, title, counterparty_name, value, ends_on, status], sort: created_at desc}
+
+- name: Obligation
+  label: Obligation
+  label_plural: Obligations
+  kind: master
+  module: contracts
+  title_field: description
+  description: Something a contract commits to, owned and due.
+  fields:
+    - {name: contract, type: link, to: Contract, required: true, in_list: true, in_filter: true}
+    - {name: description, type: data, required: true, in_list: true}
+    - {name: owner, type: email, required: true, in_list: true, in_filter: true}
+    - {name: due_on, type: date, required: true, in_list: true}
+    - {name: status, type: select, options: [Open, Done], default: Open, in_list: true, in_filter: true}
+    - {name: done_on, type: date, read_only: true, no_copy: true}
+    - {name: overdue, type: check, read_only: true, no_copy: true, in_list: true, in_filter: true}
+  list: {columns: [contract, description, owner, due_on, status, overdue], sort: due_on asc}
