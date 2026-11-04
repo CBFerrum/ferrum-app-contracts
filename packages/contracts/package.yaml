@@ -1,0 +1,28 @@
+package: contracts
+version: 0.1.0
+label: Contracts
+description: "Contracts from approved clauses, approval above a threshold, signature through Sign, activation, renewal, notice and obligations"
+depends: [core, sign]
+
+modules:
+  - name: contracts
+    label: Contracts
+    icon: file-text
+    order: 59
+    items: [Contract, Obligation, Clause, ContractSettings]
+
+roles:
+  - name: Contract Manager
+    description: Drafts contracts from the clause library, sends them for signature, and keeps their obligations.
+    permissions:
+      - {entity: ContractSettings, read: true, write: true, create: true}
+      - {entity: Clause, read: true, write: true, create: true}
+      - {entity: Contract, read: true, write: true, create: true, export: true}
+      - {entity: Obligation, read: true, write: true, create: true, export: true}
+      - {entity: SignRequest, read: true}
+  - name: Contract Approver
+    description: Approves or sends back contracts worth the threshold or more, and approves clauses.
+    permissions:
+      - {entity: Contract, read: true, write: true}
+      - {entity: Clause, read: true, write: true}
+      - {entity: Obligation, read: true}
