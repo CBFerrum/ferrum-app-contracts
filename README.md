@@ -58,6 +58,7 @@ cd ui && npm run build && npm run check
 
 | Version | Highlights |
 |---|---|
+| **0.1.1** | Send for Signature only with the PDF, which the field says to attach before submitting. |
 | **0.1.0** | Contracts from approved clauses, approval above a threshold, signature through Sign, activation, renewal, notice and obligations (FERRUM-ECOSYSTEM-008). |
 
 ## License

@@ -52,7 +52,7 @@
     - {name: renewal_months, type: int, default: 12}
     - {name: notice_days, type: int, default: 30, description: "Days before the end by which notice not to renew is given"}
     - {name: clauses, type: table, of: ContractClause}
-    - {name: document, type: attach, description: "The PDF to sign"}
+    - {name: document, type: attach, description: "The PDF to sign: part of the terms, so attached before the contract is submitted"}
     - {name: status, type: select, options: [Draft, In Review, Approved, Out for Signature, Signed, Active, Expired, Terminated], default: Draft, read_only: true, no_copy: true, in_list: true, in_filter: true}
     - {name: approved_by, type: email, read_only: true, no_copy: true}
     - {name: decision_note, type: text, read_only: true, no_copy: true}
@@ -67,7 +67,7 @@
     - {name: submit_contract, label: Submit It, permission: write, condition: "doc.status == 'Draft'"}
     - {name: approve_contract, label: Approve It, permission: write, condition: "doc.status == 'In Review'"}
     - {name: reject_contract, label: Send It Back, permission: write, condition: "doc.status == 'In Review'", params: [{name: note, type: text, label: Why, required: true}]}
-    - {name: send_for_signature, label: Send for Signature, permission: write, condition: "doc.status == 'Approved'"}
+    - {name: send_for_signature, label: Send for Signature, permission: write, condition: "doc.status == 'Approved' && doc.document != null"}
     - {name: terminate_contract, label: Terminate It, permission: write, condition: "doc.status == 'Signed' || doc.status == 'Active'", params: [{name: reason, type: text, label: Why, required: true}]}
   numbering: {template: "CTR-{YYYY}-{seq:5}"}
   list: {columns: [number, title, counterparty_name, value, ends_on, status], sort: created_at desc}

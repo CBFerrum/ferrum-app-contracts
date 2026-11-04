@@ -11,7 +11,9 @@ use uuid::Uuid;
 
 /// Sends `contract` for signature and returns the Sign request's id.
 pub(crate) async fn send(k: &Kernel, ctx: &Ctx, tx: &mut Tx, contract: &Doc) -> Result<Uuid> {
-    let document = s(contract, "document").ok_or_else(|| Error::field("document", "attach the PDF to sign first"))?;
+    let document = s(contract, "document").ok_or_else(|| {
+        Error::field("document", "it left its draft without the PDF to sign, which is part of its terms: draft it again with the PDF attached")
+    })?;
     let counterparty = s(contract, "counterparty_email").ok_or_else(|| Error::field("counterparty_email", "is where the request goes"))?;
     let signatory: Option<(Option<String>, Option<String>)> =
         sqlx::query_as("select signatory_name, signatory_email from e_contract_settings where tenant_id = $1 limit 1")
