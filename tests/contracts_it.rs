@@ -218,7 +218,7 @@ async fn scenario() {
     assert_eq!(t.get("Contract", big).await["approved_by"], "ca@northwind.test");
 
     // ───────────── signature through Sign ─────────────
-    refused(t.act(&cm, small, "send_for_signature", Value::Null).await, "invalid", "attach the PDF to sign first");
+    refused(t.act(&cm, small, "send_for_signature", Value::Null).await, "invalid", "is not available");
     let file = k.store_file(&cm, None, "support.pdf", "application/pdf", &pdf("Support plan", 3)).await.unwrap();
     let path = file["url"].as_str().unwrap().to_string();
     // The document is part of the terms: attached before it leaves its draft.

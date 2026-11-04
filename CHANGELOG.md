@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.1
+
+From a browser walk of a contract to its signature.
+
+- Send for Signature is offered only for a contract with its PDF, which is part of its terms and attached before it is submitted, as the field now says: an approved contract without one was offered it and then refused.
+
 ## 0.1.0
 
 Contract lifecycle management (FERRUM-ECOSYSTEM-008).
