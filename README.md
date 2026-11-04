@@ -58,6 +58,7 @@ cd ui && npm run build && npm run check
 
 | Version | Highlights |
 |---|---|
+| **0.1.2** | Rebuilt with Ferrum-Frontend 80ff179: labels name their fields, and linked titles show their titles. |
 | **0.1.1** | Send for Signature only with the PDF, which the field says to attach before submitting. |
 | **0.1.0** | Contracts from approved clauses, approval above a threshold, signature through Sign, activation, renewal, notice and obligations (FERRUM-ECOSYSTEM-008). |
 
