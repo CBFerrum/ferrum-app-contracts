@@ -67,7 +67,15 @@ pub(crate) async fn follow(k: &Kernel, ctx: &Ctx, tx: &mut Tx) -> Result<()> {
                 .await?;
         let Some((status, sealed, completed)) = row else { continue };
         let values: Value = match status.as_deref() {
-            Some("Completed") => json!({"status": "Signed", "signed_document": sealed, "signed_on": completed.map(|c| c.date_naive().to_string())}),
+            Some("Completed") => {
+                // The sealed PDF is Sign's, kept with its audit and read only by who may read that. The
+                // contract keeps a copy of its own, which whoever reads the contract may open.
+                let signed = match sealed.as_deref().and_then(|u| u.rsplit('/').next()).and_then(|f| f.parse::<Uuid>().ok()) {
+                    Some(file) => k.copy_file(ctx, file, Some(("Contract", contract))).await?.get("url").and_then(Value::as_str).map(str::to_string),
+                    None => sealed,
+                };
+                json!({"status": "Signed", "signed_document": signed, "signed_on": completed.map(|c| c.date_naive().to_string())})
+            }
             Some(st @ ("Declined" | "Expired" | "Voided")) => {
                 json!({"status": "Approved", "decision_note": format!("The signature request was {}: send it again", st.to_lowercase())})
             }

@@ -101,14 +101,16 @@ impl T {
     async fn status(&self, id: Uuid) -> String {
         self.get("Contract", id).await["status"].as_str().unwrap().to_string()
     }
-    /// What Sign records once a request ends, as its own signing would.
+    /// What Sign records once a request ends, as its own signing would: completed, its sealed PDF,
+    /// kept with Sign's own records.
     async fn sign_ends(&self, request: Uuid, status: &str) {
         let ctx = Ctx::system(self.tenant, self.k.registry.schema(self.tenant).await.unwrap());
-        let mut tx = self.k.db.tenant_tx(self.tenant).await.unwrap();
         let mut values = json!({"status": status});
         if status == "Completed" {
-            values = json!({"status": status, "sealed_document": "/files/sealed-copy", "completed_at": Utc::now().to_rfc3339()});
+            let sealed = self.k.store_file(&ctx, Some(("SignRequest", request)), "sealed.pdf", "application/pdf", &pdf("Sealed", 3)).await.unwrap();
+            values = json!({"status": status, "sealed_document": sealed["url"], "completed_at": Utc::now().to_rfc3339()});
         }
+        let mut tx = self.k.db.tenant_tx(self.tenant).await.unwrap();
         self.k.set_values_tx(&ctx, &mut tx, "SignRequest", request, obj(values)).await.unwrap();
         tx.commit().await.unwrap();
     }
@@ -249,7 +251,16 @@ async fn scenario() {
     t.sign_ends(uid(&c["sign_request"]), "Completed").await;
     ferrum_app_contracts::maintenance_on(&k, today).await.unwrap();
     let c = t.get("Contract", signed_one).await;
-    assert_eq!((c["status"].as_str(), c["signed_document"].as_str()), (Some("Active"), Some("/files/sealed-copy")), "signed, and active from its start");
+    assert_eq!(c["status"], "Active", "signed, and active from its start");
+    // The contract keeps a copy of the sealed PDF of its own: an approver, who may not read Sign's
+    // records, opens the contract's and not Sign's.
+    let file = |v: &Value| -> Uuid { v.as_str().and_then(|u| u.rsplit('/').next()).unwrap_or_else(|| panic!("not a file: {v}")).parse().unwrap() };
+    let sealed = file(&t.get("SignRequest", uid(&c["sign_request"])).await["sealed_document"]);
+    let copy = file(&c["signed_document"]);
+    assert_ne!(copy, sealed, "a copy of its own");
+    let system = Ctx::system(t.tenant, k.registry.schema(t.tenant).await.unwrap());
+    assert_eq!(k.read_file(&ca, copy).await.expect("the approver opens the signed contract").2, k.read_file(&system, sealed).await.unwrap().2);
+    refused(k.read_file(&ca, sealed).await, "forbidden", "signrequest");
     // A declined request puts the contract back to approved, saying so.
     let file2 = k.store_file(&cm, None, "nda.pdf", "application/pdf", &pdf("NDA", 1)).await.unwrap();
     let nda = uid(&t
