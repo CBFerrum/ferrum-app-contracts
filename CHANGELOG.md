@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.5
+
+Personal-data requests find the contracts a person is the counterparty of, by email or name; they are kept when erasure is asked, as contract records, and the answer says why (Ferrum's FERRUM-PRIVACY-002).
+
 ## 0.1.4
 
 Rebuilt with Ferrum-Frontend daeadda: after an action runs, a record page shows what the action said it did rather than only that it is done.
