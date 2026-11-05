@@ -26,3 +26,6 @@ roles:
       - {entity: Contract, read: true, write: true}
       - {entity: Clause, read: true, write: true}
       - {entity: Obligation, read: true}
+
+personal_data:
+  - {entity: Contract, match: counterparty_email, name: counterparty_name, retain: "Contracts, and the drafts that led to them, kept as contract law and audit require"}
