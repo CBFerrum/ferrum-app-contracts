@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.3
+
+From the browser walk of a contract through Sign.
+
+- A signed contract keeps a copy of the sealed PDF attached to itself. It linked Sign's own, which
+  is kept with Sign's audit and read only by who may read Sign's records, so an approver who could
+  read the contract was refused its signed document ("not permitted to read signevent").
+- Rebuilt with Ferrum-Frontend 16b5c57.
+
 ## 0.1.2
 
 Rebuilt with Ferrum-Frontend 80ff179: a field's label names its control for assistive technology, and a record whose title is a link shows that record's title, not its id.
