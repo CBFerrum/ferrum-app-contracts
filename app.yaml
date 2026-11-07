@@ -1,6 +1,6 @@
 id: contracts
 name: Contracts
-version: 0.1.15
+version: 0.1.16
 publisher: cbferrum
 summary: "Contracts from approved clauses, approval above a threshold, signature through Sign, activation, renewal, notice and obligations"
 description: README.md
@@ -30,3 +30,16 @@ contributes:
     - {id: contracts, package: contracts, path: "contracts/e/{entity}/{id}", list: "contracts/e/{entity}"}
   shell.create:
     - {id: contract, label: Contract, path: contracts/e/Contract/new, entity: Contract}
+  # What the assistant should know in Contracts's pages, and what it suggests asking there.
+  shell.assistant:
+    - id: contracts
+      title: "Contracts"
+      instructions: >-
+        A Contract goes Draft, In Review, Approved, Out for Signature, Signed, then Active until it Expires or is
+        Terminated; above the workspace's threshold it needs approval. Its clauses come from the approved library
+        (Clause, ContractClause). An Obligation (Open, Done) is something either side must do, by its date. Renewal
+        and notice dates are on the contract.
+      suggestions:
+        - "Which contracts expire in the next 90 days?"
+        - "Which obligations are due this month?"
+        - "What is waiting for approval or signature?"
