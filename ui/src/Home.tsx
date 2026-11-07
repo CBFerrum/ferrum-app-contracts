@@ -3,7 +3,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router";
-import { api, docPath, t } from "@ferrum/client";
+import { api, docPath, t, isolate } from "@ferrum/client";
 import { Badge, ErrorState, PageLoading, useShellTitle } from "@ferrum/kit";
 
 export interface Row {
@@ -35,7 +35,7 @@ export function byStage(list: Row[]): [string, Row[]][] {
 }
 
 export function Home() {
-  useShellTitle("Contracts");
+  useShellTitle(t("Contracts"));
   const q = useQuery({
     queryKey: ["contracts", "home"],
     queryFn: async () => {
@@ -58,7 +58,7 @@ export function Home() {
           <ul className="stack">
             {notice.map((c) => (
               <li key={c.id}>
-                <Link to={`/e/Contract/${c.id}`}>{`${String(c.title)} · renews after ${String(c.ends_on ?? "")}`}</Link>
+                <Link to={`/e/Contract/${c.id}`}>{t("{value} · renews after {value2}", { value: String(c.title), value2: String(c.ends_on ?? "") })}</Link>
               </li>
             ))}
           </ul>
@@ -68,12 +68,12 @@ export function Home() {
         {byStage(q.data.contracts).map(([stage, list]) => (
           <section key={stage} className="card card-pad stack" aria-label={stage}>
             <h3>
-              {stage} ({list.length})
+              {isolate(stage)} ({list.length})
             </h3>
             <ul className="stack">
               {list.map((c) => (
                 <li key={c.id}>
-                  <Link to={`/e/Contract/${c.id}`}>{`${String(c.title)} · ${String(c.counterparty_name ?? "")}`}</Link> <Badge tone="neutral">{String(c.status)}</Badge>
+                  <Link to={`/e/Contract/${c.id}`}>{isolate(`${String(c.title)} · ${String(c.counterparty_name ?? "")}`)}</Link> <Badge tone="neutral">{isolate(String(c.status))}</Badge>
                 </li>
               ))}
             </ul>
@@ -84,7 +84,7 @@ export function Home() {
           <ul className="stack">
             {q.data.obligations.map((o) => (
               <li key={o.id}>
-                <Link to={`/e/Obligation/${o.id}`}>{`${String(o.description)} · due ${String(o.due_on ?? "")}`}</Link> {o.overdue ? <Badge tone="red">{t("Overdue")}</Badge> : null}
+                <Link to={`/e/Obligation/${o.id}`}>{t("{value} · due {value2}", { value: String(o.description), value2: String(o.due_on ?? "") })}</Link> {o.overdue ? <Badge tone="red">{t("Overdue")}</Badge> : null}
               </li>
             ))}
           </ul>
