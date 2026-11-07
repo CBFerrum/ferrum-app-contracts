@@ -1,6 +1,6 @@
 id: contracts
 name: Contracts
-version: 0.1.13
+version: 0.1.14
 publisher: cbferrum
 summary: "Contracts from approved clauses, approval above a threshold, signature through Sign, activation, renewal, notice and obligations"
 description: README.md

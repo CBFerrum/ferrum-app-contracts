@@ -3,7 +3,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router";
-import { api, docPath } from "@ferrum/client";
+import { api, docPath, t } from "@ferrum/client";
 import { Badge, ErrorState, PageLoading, useShellTitle } from "@ferrum/kit";
 
 export interface Row {
@@ -49,12 +49,12 @@ export function Home() {
   return (
     <div className="np-page">
       <header className="row" style={{ justifyContent: "space-between" }}>
-        <h2>Contracts</h2>
-        <Link to="/e/Contract/new">New contract</Link>
+        <h2>{t("Contracts")}</h2>
+        <Link to="/e/Contract/new">{t("New contract")}</Link>
       </header>
       {notice.length > 0 && (
-        <section className="card card-pad stack" aria-label="Notice due">
-          <h3>Notice due before renewal ({notice.length})</h3>
+        <section className="card card-pad stack" aria-label={t("Notice due")}>
+          <h3>{t("Notice due before renewal ({length})", { length: notice.length })}</h3>
           <ul className="stack">
             {notice.map((c) => (
               <li key={c.id}>
@@ -79,12 +79,12 @@ export function Home() {
             </ul>
           </section>
         ))}
-        <section className="card card-pad stack" aria-label="Obligations">
-          <h3>Obligations ({q.data.obligations.length})</h3>
+        <section className="card card-pad stack" aria-label={t("Obligations")}>
+          <h3>{t("Obligations ({length})", { length: q.data.obligations.length })}</h3>
           <ul className="stack">
             {q.data.obligations.map((o) => (
               <li key={o.id}>
-                <Link to={`/e/Obligation/${o.id}`}>{`${String(o.description)} · due ${String(o.due_on ?? "")}`}</Link> {o.overdue ? <Badge tone="red">Overdue</Badge> : null}
+                <Link to={`/e/Obligation/${o.id}`}>{`${String(o.description)} · due ${String(o.due_on ?? "")}`}</Link> {o.overdue ? <Badge tone="red">{t("Overdue")}</Badge> : null}
               </li>
             ))}
           </ul>
