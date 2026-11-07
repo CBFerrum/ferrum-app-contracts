@@ -1,0 +1,12 @@
+{
+  "Contracts": "अनुबंध",
+  "Go to the contracts": "अनुबंधों पर जाएँ",
+  "New contract": "नया अनुबंध",
+  "Notice due": "सूचना देय",
+  "Notice due before renewal ({length})": "नवीनीकरण से पहले सूचना देय ({length})",
+  "Obligations": "दायित्व",
+  "Obligations ({length})": "दायित्व ({length})",
+  "Overdue": "अतिदेय",
+  "{value} · due {value2}": "{value} · देय {value2}",
+  "{value} · renews after {value2}": "{value} · {value2} के बाद नवीनीकरण"
+}
