@@ -15,17 +15,17 @@ const rows = (entity: string, filters: unknown[], extra: Record<string, string |
   api.get<{ rows: Row[] }>(docPath(entity), { filters: JSON.stringify(filters), limit: 500, ...extra }).then((r) => r.rows);
 
 const STAGES: Record<string, string> = {
-  Draft: "In the works",
-  "In Review": "In the works",
-  Approved: "In the works",
-  "Out for Signature": "Out for signature",
-  Signed: "Active",
-  Active: "Active",
+  get Draft() { return t("In the works"); },
+  get "In Review"() { return t("In the works"); },
+  get Approved() { return t("In the works"); },
+  get "Out for Signature"() { return t("Out for signature"); },
+  get Signed() { return t("Active"); },
+  get Active() { return t("Active"); },
 };
 
 /** Contracts by stage, in the stages' order. */
 export function byStage(list: Row[]): [string, Row[]][] {
-  const order = ["In the works", "Out for signature", "Active"];
+  const order = [t("In the works"), t("Out for signature"), t("Active")];
   const out = new Map<string, Row[]>(order.map((s) => [s, []]));
   for (const c of list) {
     const stage = STAGES[String(c.status)];
