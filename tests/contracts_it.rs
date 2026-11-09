@@ -251,24 +251,25 @@ async fn scenario() {
     refused(t.act(&ca, bound, "approve_contract", Value::Null).await, "invalid", "read the PDF against the clauses");
     t.act(&ca, bound, "approve_contract", json!({"pdf_matches": true})).await.expect("approved, its PDF read");
     assert_eq!(t.get("Contract", bound).await["pdf_checked_by"], "ca@northwind.test");
-    let reword = |text: &'static str| {
+    // Past the guards that keep its terms, straight into its tables: its wording or its PDF changed.
+    let behind = |sql: &'static str, value: String| {
         let k = k.clone();
         async move {
             let mut tx = k.db.tenant_tx(tenant).await.unwrap();
-            sqlx::query("update e_contract__clauses set text = $2 where tenant_id = $1 and parent_id = $3")
-                .bind(tenant)
-                .bind(text)
-                .bind(bound)
-                .execute(&mut *tx)
-                .await
-                .unwrap();
+            sqlx::query(sql).bind(tenant).bind(value).bind(bound).execute(&mut *tx).await.unwrap();
             tx.commit().await.unwrap();
         }
     };
+    let reword = |text: String| behind("update e_contract__clauses set text = $2 where tenant_id = $1 and parent_id = $3", text);
+    let attach = |url: String| behind("update e_contract set document = $2 where tenant_id = $1 and id = $3", url);
     let drafted = t.get("Contract", bound).await["clauses"][0]["text"].as_str().unwrap().to_string();
-    reword("Invoices are paid within 90 days.").await;
+    reword("Invoices are paid within 90 days.".into()).await;
     refused(t.act(&cm, bound, "send_for_signature", Value::Null).await, "invalid", "not what was approved");
-    reword(Box::leak(drafted.into_boxed_str())).await;
+    reword(drafted).await;
+    let other = k.store_file(&cm, None, "licence.pdf", "application/pdf", &pdf("Licence, another", 2)).await.unwrap();
+    attach(other["url"].as_str().unwrap().to_string()).await;
+    refused(t.act(&cm, bound, "send_for_signature", Value::Null).await, "invalid", "not what was approved");
+    attach(path.clone()).await;
     t.act(&cm, signed_one, "send_for_signature", Value::Null).await.expect("sent");
     let c = t.get("Contract", signed_one).await;
     assert_eq!(c["status"], "Out for Signature");
@@ -277,6 +278,8 @@ async fn scenario() {
         (request["status"].as_str(), request["reference_entity"].as_str(), request["reference_id"].as_str()),
         (Some("Sent"), Some("Contract"), c["id"].as_str())
     );
+    let digest = c["approved_digest"].as_str().expect("approved below the threshold, bound all the same");
+    assert_eq!(request["message"], format!("Please sign Support plan, signed, approved as {}", &digest[..12]), "the request names what was approved");
     let signers: Vec<(String, i64)> =
         request["signers"].as_array().unwrap().iter().map(|s| (s["email"].as_str().unwrap().to_string(), s["signing_order"].as_i64().unwrap())).collect();
     assert_eq!(signers, [("legal@globex.test".to_string(), 1), ("nora@northwind.test".to_string(), 2)], "the counterparty first, then the organisation");
