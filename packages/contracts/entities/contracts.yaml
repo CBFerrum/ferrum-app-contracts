@@ -55,6 +55,9 @@
     - {name: document, type: attach, description: "The PDF to sign: part of the terms, so attached before the contract is submitted"}
     - {name: status, type: select, options: [Draft, In Review, Approved, Out for Signature, Signed, Active, Expired, Terminated], default: Draft, read_only: true, no_copy: true, in_list: true, in_filter: true}
     - {name: approved_by, type: email, read_only: true, no_copy: true}
+    - {name: approved_digest, type: data, read_only: true, no_copy: true, label: Approved As,
+       description: "The SHA-256 of its terms, its clauses' wording and its PDF as they were approved: sent for signature only while they are still the same"}
+    - {name: pdf_checked_by, type: email, read_only: true, no_copy: true, label: PDF Checked By, description: "Who read the PDF against the clauses and said it says what they say"}
     - {name: decision_note, type: text, read_only: true, no_copy: true}
     - {name: sign_request, type: link, to: SignRequest, read_only: true, no_copy: true}
     - {name: signed_document, type: attach, read_only: true, no_copy: true}
@@ -65,7 +68,8 @@
     - {name: termination_reason, type: text, read_only: true, no_copy: true}
   actions:
     - {name: submit_contract, label: Submit It, permission: write, condition: "doc.status == 'Draft'"}
-    - {name: approve_contract, label: Approve It, permission: write, condition: "doc.status == 'In Review'"}
+    - {name: approve_contract, label: Approve It, permission: write, condition: "doc.status == 'In Review'",
+       params: [{name: pdf_matches, label: The PDF Says What The Clauses Say, type: check, description: "Read the attached PDF against the clauses: it is what gets signed"}]}
     - {name: reject_contract, label: Send It Back, permission: write, condition: "doc.status == 'In Review'", params: [{name: note, type: text, label: Why, required: true}]}
     - {name: send_for_signature, label: Send for Signature, permission: write, condition: "doc.status == 'Approved' && doc.document != null"}
     - {name: terminate_contract, label: Terminate It, permission: write, condition: "doc.status == 'Signed' || doc.status == 'Active'", params: [{name: reason, type: text, label: Why, required: true}]}

@@ -58,6 +58,7 @@ cd ui && npm run build && npm run check
 
 | Version | Highlights |
 |---|---|
+| **0.2.0** | An approval is bound to the wording and PDF it was given: a contract goes for signature only as approved, its PDF read against its clauses by its approver. |
 | **0.1.17** | Its names in Arabic and Hindi; the last English sentences translated. |
 | **0.1.16** | The assistant knows its records. |
 | **0.1.15** | Rebuilt with Ferrum-Frontend 5b22e7b: its own words in Arabic and Hindi. |

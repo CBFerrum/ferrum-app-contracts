@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.0
+
+An approval is bound to the exact wording and PDF it was given (Ferrum's closure review, FEO-038). Approving a contract records Approved As: the SHA-256 of its terms, each clause's wording as drafted and its PDF as stored. A contract that has a PDF is approved only by someone who says they read it against the clauses (The PDF Says What The Clauses Say), named as PDF Checked By; one approved below the threshold names no one. It goes for signature only while its digest is still the one approved, and the request Sign sends names it. Terms were already kept once a contract left its draft.
+
 ## 0.1.17
 
 Rebuilt with Ferrum-Frontend c59c9a2: the names of its models, fields and manifest in Arabic and Hindi (92 each in ui/src/locales/names, which the platform serves to every page of the workspace, so a record's labels, the launcher and the bar read in the person's language), and the sentences its pages still showed in English (split around a link or a figure, built in code from a template or word by word) whole and translated (11 words each in ui/src/locales). Translated by the model, to be reviewed by native speakers.

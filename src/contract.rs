@@ -26,6 +26,22 @@ fn terms(doc: &Doc) -> Vec<Option<String>> {
     t
 }
 
+/// What an approval is bound to: the contract's terms, each clause's wording as drafted, and its PDF's
+/// stored SHA-256 (FEO-038). The same contract gives the same digest; any change gives another.
+pub(crate) async fn approved_digest(hc: &mut HookCtx<'_>, doc: &Doc) -> Result<String> {
+    let pdf: Option<String> = match s(doc, "document").and_then(|u| u.rsplit('/').next()).and_then(|f| f.parse::<uuid::Uuid>().ok()) {
+        Some(file) => sqlx::query_scalar("select sha256 from file_object where tenant_id = $1 and id = $2")
+            .bind(hc.ctx.tenant)
+            .bind(file)
+            .fetch_optional(&mut **hc.tx)
+            .await?
+            .flatten(),
+        None => None,
+    };
+    let clauses: Vec<Value> = rows(doc, "clauses").iter().map(|c| json!([s(c, "clause"), s(c, "text")])).collect();
+    Ok(ferrum_kernel::receipt::digest("contract approval", None, &json!({"terms": terms(doc), "clauses": clauses, "pdf": pdf})))
+}
+
 pub struct ContractHook;
 
 #[async_trait]
@@ -109,7 +125,8 @@ impl DocHook for ContractHook {
                     .await?
                     .flatten();
                 if d(doc, "value") < threshold.unwrap_or(Decimal::ZERO) {
-                    json!({"status": "Approved", "decision_note": "Below the approval threshold"})
+                    // Nobody compared its PDF with its clauses: the approval says so by naming no one.
+                    json!({"status": "Approved", "decision_note": "Below the approval threshold", "approved_digest": approved_digest(hc, doc).await?})
                 } else {
                     json!({"status": "In Review"})
                 }
@@ -122,12 +139,25 @@ impl DocHook for ContractHook {
                     return Err(Error::Forbidden("a contract is approved by someone other than its owner".into()));
                 }
                 if name == "approve_contract" {
-                    json!({"status": "Approved", "approved_by": hc.ctx.email, "decision_note": note("note")})
+                    // The PDF is what gets signed: its approver says it says what the clauses say (FEO-038).
+                    let checked = s(doc, "document").is_some();
+                    if checked && params.get("pdf_matches").and_then(Value::as_bool) != Some(true) {
+                        return Err(Error::field("pdf_matches", "read the PDF against the clauses, and say it says what they say"));
+                    }
+                    json!({"status": "Approved", "approved_by": hc.ctx.email, "decision_note": note("note"),
+                           "approved_digest": approved_digest(hc, doc).await?, "pdf_checked_by": if checked { json!(hc.ctx.email) } else { Value::Null }})
                 } else {
                     json!({"status": "Draft", "decision_note": note("note").ok_or_else(|| Error::field("note", "sending it back says why"))?})
                 }
             }
             "send_for_signature" => {
+                // What goes for signature is what was approved, wording and PDF (FEO-038); one approved before
+                // approvals were bound has nothing to compare.
+                if let Some(approved) = s(doc, "approved_digest")
+                    && approved != approved_digest(hc, doc).await?
+                {
+                    return Err(Error::invalid("its wording or its PDF is not what was approved: send it back and approve it again"));
+                }
                 let request = crate::sign::send(hc.kernel, &system, hc.tx, doc).await?;
                 json!({"status": "Out for Signature", "sign_request": request.to_string()})
             }

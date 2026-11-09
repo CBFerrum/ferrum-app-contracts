@@ -31,7 +31,10 @@ pub(crate) async fn send(k: &Kernel, ctx: &Ctx, tx: &mut Tx, contract: &Doc) -> 
             "SignRequest",
             obj(json!({
                 "title": s(contract, "title"), "document": document, "signing_mode": "Sequential",
-                "message": format!("Please sign {}", s(contract, "title").unwrap_or("the contract")),
+                "message": match s(contract, "approved_digest") {
+                    Some(d) => format!("Please sign {}, approved as {}", s(contract, "title").unwrap_or("the contract"), &d[..12.min(d.len())]),
+                    None => format!("Please sign {}", s(contract, "title").unwrap_or("the contract")),
+                },
                 "reference_entity": "Contract", "reference_id": s(contract, "id"),
                 "signers": [
                     {"role": "Counterparty", "name": s(contract, "counterparty_name"), "email": counterparty, "signing_order": 1},
