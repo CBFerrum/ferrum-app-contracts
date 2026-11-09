@@ -217,7 +217,10 @@ async fn scenario() {
     t.set(&both, "Contract", big, json!({"clauses": [{"clause": pay.to_string()}, {"clause": liab.to_string()}]})).await.expect("a draft changes");
     t.act(&both, big, "submit_contract", Value::Null).await.unwrap();
     t.act(&ca, big, "approve_contract", Value::Null).await.expect("approved by another");
-    assert_eq!(t.get("Contract", big).await["approved_by"], "ca@northwind.test");
+    let approved = t.get("Contract", big).await;
+    assert_eq!(approved["approved_by"], "ca@northwind.test");
+    assert!(approved["approved_digest"].as_str().is_some_and(|d| d.len() == 64), "bound to what was approved: {approved:?}");
+    assert!(approved["pdf_checked_by"].is_null(), "it has no PDF to read");
 
     // ───────────── signature through Sign ─────────────
     refused(t.act(&cm, small, "send_for_signature", Value::Null).await, "invalid", "is not available");
@@ -234,6 +237,38 @@ async fn scenario() {
         )
         .await["id"]);
     t.act(&cm, signed_one, "submit_contract", Value::Null).await.unwrap();
+    // An approval is bound to the wording and the PDF it was given (FEO-038): one over the threshold is
+    // approved by someone who read the PDF against the clauses, and goes for signature only as approved.
+    let bound = uid(&t
+        .insert(
+            &cm,
+            "Contract",
+            json!({"title": "Licence with its PDF", "counterparty_name": "Globex", "counterparty_email": "legal@globex.test", "value": "250000",
+                   "starts_on": start, "ends_on": end, "document": path, "clauses": [{"clause": pay.to_string()}]}),
+        )
+        .await["id"]);
+    t.act(&cm, bound, "submit_contract", Value::Null).await.unwrap();
+    refused(t.act(&ca, bound, "approve_contract", Value::Null).await, "invalid", "read the PDF against the clauses");
+    t.act(&ca, bound, "approve_contract", json!({"pdf_matches": true})).await.expect("approved, its PDF read");
+    assert_eq!(t.get("Contract", bound).await["pdf_checked_by"], "ca@northwind.test");
+    let reword = |text: &'static str| {
+        let k = k.clone();
+        async move {
+            let mut tx = k.db.tenant_tx(tenant).await.unwrap();
+            sqlx::query("update e_contract__clauses set text = $2 where tenant_id = $1 and parent_id = $3")
+                .bind(tenant)
+                .bind(text)
+                .bind(bound)
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+        }
+    };
+    let drafted = t.get("Contract", bound).await["clauses"][0]["text"].as_str().unwrap().to_string();
+    reword("Invoices are paid within 90 days.").await;
+    refused(t.act(&cm, bound, "send_for_signature", Value::Null).await, "invalid", "not what was approved");
+    reword(Box::leak(drafted.into_boxed_str())).await;
     t.act(&cm, signed_one, "send_for_signature", Value::Null).await.expect("sent");
     let c = t.get("Contract", signed_one).await;
     assert_eq!(c["status"], "Out for Signature");
