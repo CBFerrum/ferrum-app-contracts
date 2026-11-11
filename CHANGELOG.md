@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1
+
+The interface follows the upgraded design system, rebuilt with Ferrum-Frontend 0a47157. Text uses the kit's type roles (nothing under 12px) and controls its height tokens; loading shows skeletons shaped like what is coming; empty, no matches, denied, offline and failed are told apart; status colours come from stored state ids. The interface check now runs the UI lint against an empty baseline. The home is rebuilt on the kit's work-home pattern: one page title, the main action as a button, queues with their counts, status at its natural width; its other own pages follow the same anatomy.
+
 ## 0.2.0
 
 An approval is bound to the exact wording and PDF it was given (Ferrum's closure review, FEO-038). Approving a contract records Approved As: the SHA-256 of its terms, each clause's wording as drafted and its PDF as stored. A contract that has a PDF is approved only by someone who says they read it against the clauses (The PDF Says What The Clauses Say), named as PDF Checked By; one approved below the threshold names no one. It goes for signature only while its digest is still the one approved, and the request Sign sends names it. Terms were already kept once a contract left its draft.
