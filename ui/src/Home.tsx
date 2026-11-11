@@ -3,7 +3,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { api, docPath, formatValue, t, isolate } from "@ferrum/client";
-import { Badge, ButtonLink, HomeSkeleton, LoadFailed, PageHead, Queue, QueueGrid, QueueItem, StatusBadge, useShellTitle } from "@ferrum/kit";
+import { Badge, ButtonLink, HomeSkeleton, LoadFailed, PageHead, PageStack, Queue, QueueGrid, QueueItem, StatusBadge, useShellTitle } from "@ferrum/kit";
 
 export interface Row {
   id: string;
@@ -54,25 +54,26 @@ export function Home() {
     </ButtonLink>
   );
   if (q.isPending) return (
-    <>
+    <PageStack>
       <PageHead title={t("Contracts")} />
       <HomeSkeleton queues={4} />
-    </>
+    </PageStack>
   );
   if (q.isError) return (
-    <>
+    <PageStack>
       <PageHead title={t("Contracts")} actions={create} />
       <LoadFailed error={q.error} onRetry={() => void q.refetch()} />
-    </>
+    </PageStack>
   );
   const notice = q.data.contracts.filter((c) => c.notice_due);
   // What is late comes before what is merely due.
   const obligations = [...q.data.obligations].sort((a, b) => Number(Boolean(b.overdue)) - Number(Boolean(a.overdue)));
+  const summary = [notice.length && t("{n} notice due", { n: notice.length }), obligations.length && t("{n} obligations open", { n: obligations.length })].filter(Boolean).join(" · ");
   const late = obligations.some((o) => o.overdue);
   const contract = (c: Row, meta: string) => <QueueItem key={c.id} to={`/e/Contract/${c.id}`} title={isolate(String(c.title))} meta={meta} trailing={<StatusBadge value={c.status} />} />;
   return (
-    <>
-      <PageHead title={t("Contracts")} description={notice.length + obligations.length > 0 ? t("{notice} notice due · {open} obligations open", { notice: notice.length, open: obligations.length }) : undefined} actions={create} />
+    <PageStack>
+      <PageHead title={t("Contracts")} description={summary ? isolate(summary) : undefined} actions={create} />
       <QueueGrid>
         {notice.length > 0 && (
           <Queue title={t("Notice due before renewal")} count={notice.length} tone="attention" more={{ to: "/e/Contract", count: notice.length - LIMIT }}>
@@ -90,6 +91,6 @@ export function Home() {
           </Queue>
         ))}
       </QueueGrid>
-    </>
+    </PageStack>
   );
 }
