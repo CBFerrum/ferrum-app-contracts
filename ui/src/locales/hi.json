@@ -3,11 +3,11 @@
   "Go to the contracts": "अनुबंधों पर जाएँ",
   "In the works": "प्रक्रिया में",
   "New contract": "नया अनुबंध",
-  "Notice due": "सूचना देय",
-  "Notice due before renewal ({length})": "नवीनीकरण से पहले सूचना देय ({length})",
+  "Notice due before renewal": "नवीनीकरण से पहले सूचना देय",
   "Obligations": "दायित्व",
-  "Obligations ({length})": "दायित्व ({length})",
   "Out for signature": "हस्ताक्षर के लिए भेजा",
-  "{value} · due {value2}": "{value} · देय {value2}",
-  "{value} · renews after {value2}": "{value} · {value2} के बाद नवीनीकरण"
+  "due {day}": "देय {day}",
+  "renews after {day}": "{day} के बाद नवीनीकरण",
+  "{n} notice due": "{n} सूचनाएँ देय",
+  "{n} obligations open": "{n} दायित्व खुले"
 }
