@@ -1,12 +1,13 @@
 {
   "Contracts": "العقود",
-  "due {day}": "مستحق في {day}",
   "Go to the contracts": "اذهب إلى العقود",
   "In the works": "قيد الإعداد",
   "New contract": "عقد جديد",
   "Notice due before renewal": "إشعار مستحق قبل التجديد",
   "Obligations": "الالتزامات",
   "Out for signature": "بانتظار التوقيع",
+  "due {day}": "مستحق في {day}",
   "renews after {day}": "يتجدد بعد {day}",
-  "{notice} notice due · {open} obligations open": "{notice} إشعار مستحق · {open} التزامات مفتوحة"
+  "{n} notice due": "{n} إشعار مستحق",
+  "{n} obligations open": "{n} التزامات مفتوحة"
 }
