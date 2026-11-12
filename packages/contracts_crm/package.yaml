@@ -1,0 +1,11 @@
+package: contracts_crm
+version: 0.1.0
+label: Contracts and CRM
+description: The opportunity a contract closes, where CRM is installed.
+depends: [contracts, crm]
+field_prefix: crm_
+
+overlays:
+  - entity: Contract
+    ops:
+      - {op: add_field, field: {name: crm_opportunity, type: link, to: Opportunity, label: Opportunity, in_filter: true, description: "The deal this contract closes"}}

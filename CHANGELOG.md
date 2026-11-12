@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.3.0
+
+Closes the documents audit's tier-1 rows for Contracts (DC-57, 58, 63, 65, 66, 67, 69, 70, 71, 74, 75, 77).
+
+* **A body from a contract type.** New Contract Type (template, clauses with a mandatory mark, renewal as New
+  Version or New Contract); two generic types and their document templates (`contracts.services_agreement`,
+  `contracts.non_disclosure`) seeded and editable. A contract of a type starts with its clauses; Submit It
+  refuses one missing a mandatory clause (or its fallback), freezes the body as a kept file (Document, Document
+  SHA-256) and lists it under Versions with who, when and why. Body Text keeps its words for search.
+* **Clauses** take merge fields (`{{ doc.<field> }}`) filled when drafted, and a fallback clause.
+* **Parties.** Signatories (name, email, role, order) and Readers as lines; Department; connector packages
+  linking a contract to a customer, supplier, contact, project, opportunity, sales order, purchase order or
+  employee where those are installed.
+* **Approval by policy.** The package's workflow Contract Approval: Submit It takes `Approve`, whose default
+  policy asks a Contract Approver (not the submitter) at the threshold or more; its completion runs the hidden
+  action Approval Granted, which binds the approval as before. Rejected or recalled, upkeep sends it back to its
+  draft with the reason. Without an `Approve` transition, the single approver as before.
+* **Signature** goes to the signatories in their order, boxes on the signature page; Record Signed Copy records
+  one signed elsewhere (Signed Elsewhere, Signed Elsewhere By).
+* **Term.** Renewal Notice On (computed), Renew It (Previous, Renewed By), reminders once each with three
+  message templates and Contract Settings' Reminder Days (14); upkeep locks the rows it moves.
+* **Obligations** have a kind (Obligation, Milestone) and a side (Us, Counterparty).
+* **Reports**: Contracts by State, Contracts Ending or Renewing, Obligations Due, Days from Draft to Signed.
+* **Confidential** contracts read by their owner, readers and the new Legal role; Contract Manager may import.
+  Existing contracts are marked not confidential by a backfill.
+
 ## 0.2.2
 
 Rebuilt with Ferrum-Frontend 45dad7f, the design system as tuned after the landed build was reviewed. The left menu's icons are chosen so that none repeats on more than three rows and each fits its row; their drawings load beside the first page instead of inside it, so the page starts lighter; a row that scrolls sideways fades at the edge where there is more, in every browser and with reduced motion; a printed record leaves out empty fields and keeps its totals with the table; menus and popovers sit inside the page's landmarks for assistive technology; a selection bar folds what does not fit into More on a narrow screen. Nothing else changes.
