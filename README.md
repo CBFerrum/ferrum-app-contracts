@@ -51,7 +51,9 @@ Contract lifecycle management for [Ferrum](https://github.com/CBFerrum/Ferrum):
   from the left, rows 110 points apart from 150 points down, at most twelve. (A contract with no type and no
   signatories keeps the two boxes it always had.) Upkeep follows the request: completed, the contract is signed
   with the sealed PDF; declined, expired or voided, it is approved again, saying so. A server without a PDF
-  service keeps the body as a page, and refuses to send it for signature, saying so.
+  service keeps the body as a page, and refuses to send it for signature, saying so. **To sign, an operator sets
+  `FERRUM_PDF_URL` (the PDF service the platform renders documents with) and installs Sign; without them contracts
+  can still be approved and kept, and a copy signed elsewhere recorded.**
 - **Signed elsewhere.** Record Signed Copy takes the uploaded signed PDF, who signed and when: the contract is
   Signed, marked Signed Elsewhere, and keeps its own copy. From a draft (an import), only a Contract Approver or
   Legal records it.
@@ -101,6 +103,7 @@ cd ui && npm run build && npm run check
 
 | Version | Highlights |
 |---|---|
+| **0.3.1** | Send for Signature refuses a page (a body kept where there is no PDF service) up front, naming `FERRUM_PDF_URL`; the contract stays Approved and no request is made. |
 | **0.3.0** | Contract types whose body is generated and kept by version; clauses with merge fields and fallbacks; parties and governed records as links; approval by policy; signatories in order; signed-elsewhere copies; renewals as versions or new contracts; reminders; reports; confidential contracts. |
 | **0.2.2** | Rebuilt on the tuned design system: better menu icons, a lighter first page, a visible scroll cue, cleaner print. |
 | **0.2.1** | The redesigned interface: the upgraded design system, shaped loading, told-apart states. |
