@@ -1,0 +1,13 @@
+package: contracts_parties
+version: 0.1.0
+label: Contracts and Customers and Suppliers
+description: A contract's party as a record - the customer, the supplier or the contact it is with - where the shared customers and suppliers are installed. Its counterparty's typed name stays.
+depends: [contracts, parties]
+field_prefix: pty_
+
+overlays:
+  - entity: Contract
+    ops:
+      - {op: add_field, field: {name: pty_customer, type: link, to: Customer, label: Customer, in_filter: true, description: "The customer this contract is with"}}
+      - {op: add_field, field: {name: pty_supplier, type: link, to: Supplier, label: Supplier, in_filter: true, description: "The supplier this contract is with"}}
+      - {op: add_field, field: {name: pty_contact, type: link, to: Contact, label: Contact, in_filter: true, description: "The person this contract is with"}}

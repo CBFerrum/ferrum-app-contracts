@@ -1,0 +1,11 @@
+package: contracts_buying
+version: 0.1.0
+label: Contracts and Buying
+description: The purchase order a contract governs, where ERP's buying is installed.
+depends: [contracts, buying]
+field_prefix: buy_
+
+overlays:
+  - entity: Contract
+    ops:
+      - {op: add_field, field: {name: buy_purchase_order, type: link, to: PurchaseOrder, label: Purchase Order, in_filter: true, description: "The purchase order this contract governs"}}

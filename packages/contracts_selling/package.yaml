@@ -1,0 +1,11 @@
+package: contracts_selling
+version: 0.1.0
+label: Contracts and Selling
+description: The sales order a contract governs, where ERP's selling is installed.
+depends: [contracts, selling]
+field_prefix: sel_
+
+overlays:
+  - entity: Contract
+    ops:
+      - {op: add_field, field: {name: sel_sales_order, type: link, to: SalesOrder, label: Sales Order, in_filter: true, description: "The sales order this contract governs"}}

@@ -1,17 +1,21 @@
-//! Contract lifecycle management (FERRUM-ECOSYSTEM-008): contracts from approved clauses, approval
-//! above a threshold, signature through Sign, activation, renewal, notice and obligations.
+//! Contract lifecycle management (FERRUM-ECOSYSTEM-008): contracts of a type from approved clauses,
+//! their body generated and kept by version, approval by policy, signature through Sign, activation,
+//! renewal, notice, obligations and reminders.
 //!
-//! * `contract`: drafts from the clause library, approval by someone other than the owner, terms
-//!   kept once out of the draft; clauses approved by a Contract Approver.
-//! * `sign`: an approved contract sent to Sign, the counterparty first, then the organisation;
-//!   followed to its signature, or back to approved.
+//! * `contract`: drafts from the clause library, the body made from the type's template and frozen
+//!   at each submit, approval through the workspace's policy (or the threshold), terms kept once out of
+//!   the draft; clauses approved by a Contract Approver; a copy signed elsewhere recorded.
+//! * `sign`: an approved contract sent to Sign, to its signatories in order; followed to its
+//!   signature, or back to approved.
 //! * `term`: signed contracts active from their start, renewed or expired at their end, notice due
-//!   before a renewal; obligations overdue when late.
+//!   before a renewal; obligations overdue when late; reminders, once each; Renew It.
+//! * `reports`: by state, ending or renewing, obligations due, days from draft to signed.
 //!
 //! This app's own design; no code was copied (docs/PROVENANCE.md). Hooks are registered per entity,
 //! so a workspace without the `contracts` package never runs them.
 
 mod contract;
+mod reports;
 mod sign;
 mod term;
 
@@ -41,12 +45,12 @@ pub fn register(hooks: &mut HookRegistry) {
         .register("Obligation", Arc::new(term::ObligationHook));
 }
 
-/// This app's reports: none of its own yet.
+/// This app's reports.
 pub fn reports() -> Vec<Arc<dyn ReportSource>> {
-    vec![]
+    vec![Arc::new(reports::ContractReports)]
 }
 
-/// Upkeep: signatures followed, terms moved on, obligations overdue.
+/// Upkeep: approvals and signatures followed, terms moved on, obligations overdue, reminders sent.
 pub async fn maintenance(k: &Kernel) -> Result<()> {
     maintenance_on(k, Utc::now().date_naive()).await
 }
@@ -65,6 +69,7 @@ pub async fn maintenance_on(k: &Kernel, today: NaiveDate) -> Result<()> {
             }
             let ctx = Ctx::system(tenant, schema);
             let mut tx = k.db.tenant_tx(tenant).await?;
+            contract::follow_approvals(k, &ctx, &mut tx).await?;
             sign::follow(k, &ctx, &mut tx).await?;
             term::upkeep(k, &ctx, &mut tx, today).await?;
             tx.commit().await?;
@@ -85,6 +90,38 @@ pub(crate) fn obj(v: Value) -> Doc {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The connector packages link a contract to records of apps this repository does not build with: those apps'
+    /// packages stand in here by the entity each link names (CRM's Opportunity, selling's SalesOrder, buying's
+    /// PurchaseOrder, HR's Employee).
+    #[test]
+    fn the_packages_and_their_connectors_are_valid() {
+        let stub = |name: &'static str, entity: &str| -> ferrum_meta::Package {
+            let yaml = format!("package: {name}\nversion: 0.0.1\ndepends: [core]\n");
+            let entities = format!("- name: {entity}\n  label: {entity}\n  kind: master\n  fields:\n    - {{name: title, type: data}}\n");
+            let files: Vec<(&str, &str, &str)> =
+                vec![(name, "package.yaml", Box::leak(yaml.into_boxed_str())), (name, "entities/e.yaml", Box::leak(entities.into_boxed_str()))];
+            ferrum_meta::catalog::load_embedded(&files).expect("stub").remove(0)
+        };
+        let mut all = ferrum_domain::packages().expect("platform packages");
+        all.extend(ferrum_app_sign::packages().expect("Sign's packages"));
+        all.extend([stub("crm", "Opportunity"), stub("selling", "SalesOrder"), stub("buying", "PurchaseOrder"), stub("hr", "Employee")]);
+        all.extend(packages().expect("app packages"));
+        let catalog = ferrum_meta::Catalog::from_packages(all).unwrap_or_else(|e| panic!("{e}"));
+        let names: Vec<String> =
+            ["contracts", "contracts_parties", "contracts_projects", "contracts_crm", "contracts_selling", "contracts_buying", "contracts_hr"]
+                .map(String::from)
+                .to_vec();
+        let schema = ferrum_meta::effective::build(&catalog, &catalog.closure(&names).unwrap(), &[], 1).unwrap_or_else(|e| panic!("{e}"));
+        assert!(schema.warnings.is_empty(), "{:?}", schema.warnings);
+        let contract = schema.entity("Contract").expect("Contract");
+        for f in ["pty_customer", "pty_supplier", "pty_contact", "prj_project", "crm_opportunity", "sel_sales_order", "buy_purchase_order", "hr_employee"] {
+            assert!(contract.field(f).is_some(), "{f}");
+        }
+        assert!(contract.workflow.is_some(), "the default approval policy comes with the package");
+        let alone = ferrum_meta::effective::build(&catalog, &catalog.closure(&["contracts".to_string()]).unwrap(), &[], 1).unwrap();
+        assert!(alone.warnings.is_empty() && alone.entity("Contract").unwrap().field("pty_customer").is_none(), "without the others, the typed name only");
+    }
 
     #[test]
     fn the_interface_is_a_release_the_platform_takes() {

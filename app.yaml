@@ -1,8 +1,8 @@
 id: contracts
 name: Contracts
-version: 0.2.2
+version: 0.3.0
 publisher: cbferrum
-summary: "Contracts from approved clauses, approval above a threshold, signature through Sign, activation, renewal, notice and obligations"
+summary: "Contracts from types and approved clauses, their body generated and kept by version, approval by policy, signature through Sign to any signatories, renewal, notice, obligations and reminders"
 description: README.md
 categories: [productivity, sales]
 license: AGPL-3.0-only
@@ -36,9 +36,13 @@ contributes:
       title: "Contracts"
       instructions: >-
         A Contract goes Draft, In Review, Approved, Out for Signature, Signed, then Active until it Expires or is
-        Terminated; above the workspace's threshold it needs approval. Its clauses come from the approved library
-        (Clause, ContractClause). An Obligation (Open, Done) is something either side must do, by its date. Renewal
-        and notice dates are on the contract.
+        Terminated; submitting it asks the approval policy (Contract Approval), which at the workspace's threshold or
+        more asks a Contract Approver. A Contract Type names the document template its body is made from; each
+        submit keeps the body as a version (versions). Its clauses come from the approved library (Clause,
+        ContractClause), its signatories sign in order, and one signed elsewhere is marked signed_elsewhere. A
+        confidential contract is read by its owner, its readers and Legal. An Obligation (Open, Done; an obligation
+        or a milestone) is something either side must do, by its date. Renewal and notice dates are on the
+        contract.
       suggestions:
         - "Which contracts expire in the next 90 days?"
         - "Which obligations are due this month?"
