@@ -58,6 +58,7 @@ cd ui && npm run build && npm run check
 
 | Version | Highlights |
 |---|---|
+| **0.2.2** | Rebuilt on the tuned design system: better menu icons, a lighter first page, a visible scroll cue, cleaner print. |
 | **0.2.1** | The redesigned interface: the upgraded design system, shaped loading, told-apart states. |
 | **0.2.0** | An approval is bound to the wording and PDF it was given: a contract goes for signature only as approved, its PDF read against its clauses by its approver. |
 | **0.1.17** | Its names in Arabic and Hindi; the last English sentences translated. |
