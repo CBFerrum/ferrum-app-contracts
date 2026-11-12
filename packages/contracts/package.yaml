@@ -1,7 +1,7 @@
 package: contracts
-version: 0.1.0
+version: 0.2.0
 label: Contracts
-description: "Contracts from approved clauses, approval above a threshold, signature through Sign, activation, renewal, notice and obligations"
+description: "Contracts from contract types and approved clauses, their body generated and kept by version, approval by policy, signature through Sign, activation, renewal, notice, obligations and reminders"
 depends: [core, sign]
 
 modules:
@@ -9,23 +9,173 @@ modules:
     label: Contracts
     icon: file-text
     order: 59
-    items: [Contract, Obligation, Clause, ContractSettings]
+    items: [Contract, Obligation, Clause, ContractType, ContractSettings, report:contracts_by_state, report:contracts_ending, report:contract_obligations_due, report:contract_cycle_time]
 
 roles:
   - name: Contract Manager
-    description: Drafts contracts from the clause library, sends them for signature, and keeps their obligations.
+    description: Drafts contracts from the clause library, sends them for signature, and keeps their obligations. Reads a confidential contract only when they own it or are among its readers.
     permissions:
       - {entity: ContractSettings, read: true, write: true, create: true}
       - {entity: Clause, read: true, write: true, create: true}
-      - {entity: Contract, read: true, write: true, create: true, export: true}
+      - {entity: ContractType, read: true, write: true, create: true}
+      - {entity: Contract, read: true, write: true, create: true, export: true, import: true, where: {confidential: false}}
+      - {entity: Contract, read: true, write: true, create: true, if_owner: true}
       - {entity: Obligation, read: true, write: true, create: true, export: true}
       - {entity: SignRequest, read: true}
   - name: Contract Approver
-    description: Approves or sends back contracts worth the threshold or more, and approves clauses.
+    description: Approves or sends back contracts as the approval policy asks, and approves clauses. Reads a confidential contract only when they own it, are among its readers, or are asked to approve it.
     permissions:
-      - {entity: Contract, read: true, write: true}
+      - {entity: Contract, read: true, write: true, where: {confidential: false}}
+      - {entity: Contract, read: true, write: true, if_owner: true}
       - {entity: Clause, read: true, write: true}
+      - {entity: ContractType, read: true}
       - {entity: Obligation, read: true}
+  - name: Legal
+    description: Reads and keeps every contract, confidential ones too.
+    permissions:
+      - {entity: Contract, read: true, write: true, create: true, export: true, import: true}
+      - {entity: Clause, read: true}
+      - {entity: ContractType, read: true}
+      - {entity: Obligation, read: true, write: true, create: true, export: true}
+
+# Approval by policy (docs/api.md, "Approvals on a transition"): Submit It takes Approve, which asks a Contract
+# Approver other than whoever submitted when the contract is worth the threshold or more, and goes through at once
+# otherwise. A workspace replaces this workflow with its own (more steps, value bands, a type or a department,
+# stand-ins and escalation) keeping a transition named Approve from its first state; without one, Submit It falls
+# back to the single approver it had before.
+workflows:
+  - name: Contract Approval
+    entity: Contract
+    initial_state: Open
+    states:
+      - {name: Open}
+      - {name: Approved}
+    transitions:
+      - action: Approve
+        from: Open
+        to: Approved
+        roles: [Contract Manager, Legal]
+        condition: "doc.status == 'In Review'"
+        effects:
+          - {type: invoke, capability: contracts.contract.approval_granted, input: {id: "doc.id"}}
+        approval:
+          steps:
+            - {label: Contract Approver, approvers: {role: Contract Approver}, when: "doc.value >= settings.ContractSettings.approval_threshold", remind_after: P2D}
+          lock: true
+
+messages:
+  - key: contracts.obligation_due
+    label: Obligation due
+    entity: Obligation
+    category: operational
+    channels: [email, inapp]
+    languages:
+      en:
+        email: {subject: "Due {{ doc.due_on }}: {{ doc.description }}", body: "<p>{{ doc.description }} is due on {{ doc.due_on }}.</p>"}
+        inapp: {title: "Due {{ doc.due_on }}: {{ doc.description }}", text: "{{ doc.description }}"}
+  - key: contracts.renewal_notice
+    label: Renewal notice date coming
+    entity: Contract
+    category: operational
+    channels: [email, inapp]
+    languages:
+      en:
+        email: {subject: "Notice for {{ doc.title }} by {{ doc.renewal_notice_on }}", body: "<p>{{ doc.title }} with {{ doc.counterparty_name }} ends on {{ doc.ends_on }}. Notice not to renew is given by {{ doc.renewal_notice_on }}.</p>"}
+        inapp: {title: "Notice for {{ doc.title }} by {{ doc.renewal_notice_on }}", text: "{{ doc.counterparty_name }}"}
+  - key: contracts.ending
+    label: Contract ending
+    entity: Contract
+    category: operational
+    channels: [email, inapp]
+    languages:
+      en:
+        email: {subject: "{{ doc.title }} ends on {{ doc.ends_on }}", body: "<p>{{ doc.title }} with {{ doc.counterparty_name }} ends on {{ doc.ends_on }} and does not renew by itself. Renew it, or let it expire.</p>"}
+        inapp: {title: "{{ doc.title }} ends on {{ doc.ends_on }}", text: "{{ doc.counterparty_name }}"}
+
+# The two generic bodies a contract type names (a workspace edits them under Settings, Documents). They name no
+# country and no law. The last page is the signature page: one block per signatory, in two columns, where Contracts
+# places each signature box (72 or 320 points from the left, 150 + 110 per row from the top, 200 by 50).
+documents:
+  - key: contracts.services_agreement
+    label: Services agreement
+    entity: Contract
+    output: page
+    languages:
+      en:
+        body: |
+          <style>
+            @page { size: A4; margin: 0 }
+            body { font: 11pt/1.45 Georgia, serif; margin: 0 }
+            .page { padding: 72pt }
+            h1 { font-size: 18pt; margin: 0 0 12pt }
+            .clause { white-space: pre-wrap; margin: 0 0 10pt }
+            .sig-page { page-break-before: always; position: relative; height: 841pt }
+            .sig { position: absolute; width: 220pt; font-size: 10pt }
+            .sig .box { height: 50pt; width: 200pt; border-bottom: 1px solid #000; margin-top: 4pt }
+          </style>
+          <div class="page">
+            <h1>{{ doc.title }}</h1>
+            <p>This agreement is made between our organisation, represented by {{ settings.ContractSettings.signatory_name }}, and {{ doc.counterparty_name }}.</p>
+            <p>It starts on {{ doc.starts_on|date('long') }} and ends on {{ doc.ends_on|date('long') }}{% if doc.auto_renew %}, renewing for {{ doc.renewal_months }} months at a time unless notice is given {{ doc.notice_days }} days before it ends{% endif %}.</p>
+            {% if doc.value %}<p>Its value is {{ doc.value|number(2) }}.</p>{% endif %}
+            <h2>Services</h2>
+            <p>The provider performs the services described in this agreement with reasonable skill and care, and the client pays for them as set out below.</p>
+            {% for c in doc.clauses %}<p class="clause">{{ loop.index }}. {{ c.text }}</p>{% endfor %}
+          </div>
+          <section class="sig-page">
+            {% if doc.signatories %}{% for s in doc.signatories %}
+            <div class="sig" style="left: {{ 72 if loop.index0 % 2 == 0 else 320 }}pt; top: {{ 120 + (loop.index0 // 2) * 110 }}pt">{{ s.role }}: {{ s.name }}<div class="box"></div></div>
+            {% endfor %}{% else %}
+            <div class="sig" style="left: 72pt; top: 120pt">Counterparty: {{ doc.counterparty_name }}<div class="box"></div></div>
+            <div class="sig" style="left: 320pt; top: 120pt">Organisation: {{ settings.ContractSettings.signatory_name }}<div class="box"></div></div>
+            {% endif %}
+          </section>
+  - key: contracts.non_disclosure
+    label: Non-disclosure agreement
+    entity: Contract
+    output: page
+    languages:
+      en:
+        body: |
+          <style>
+            @page { size: A4; margin: 0 }
+            body { font: 11pt/1.45 Georgia, serif; margin: 0 }
+            .page { padding: 72pt }
+            h1 { font-size: 18pt; margin: 0 0 12pt }
+            .clause { white-space: pre-wrap; margin: 0 0 10pt }
+            .sig-page { page-break-before: always; position: relative; height: 841pt }
+            .sig { position: absolute; width: 220pt; font-size: 10pt }
+            .sig .box { height: 50pt; width: 200pt; border-bottom: 1px solid #000; margin-top: 4pt }
+          </style>
+          <div class="page">
+            <h1>{{ doc.title }}</h1>
+            <p>This non-disclosure agreement is made between our organisation, represented by {{ settings.ContractSettings.signatory_name }}, and {{ doc.counterparty_name }}, from {{ doc.starts_on|date('long') }} to {{ doc.ends_on|date('long') }}.</p>
+            <h2>Confidential information</h2>
+            <p>Each party keeps the other's confidential information secret, uses it only for the purpose the parties agreed, and shares it only with people who need it for that purpose and are bound to keep it secret too. Information that is public, already known to the receiving party, or received lawfully from someone else is not confidential information.</p>
+            <p>When this agreement ends, or when asked, each party returns or destroys the other's confidential information.</p>
+            {% for c in doc.clauses %}<p class="clause">{{ loop.index }}. {{ c.text }}</p>{% endfor %}
+          </div>
+          <section class="sig-page">
+            {% if doc.signatories %}{% for s in doc.signatories %}
+            <div class="sig" style="left: {{ 72 if loop.index0 % 2 == 0 else 320 }}pt; top: {{ 120 + (loop.index0 // 2) * 110 }}pt">{{ s.role }}: {{ s.name }}<div class="box"></div></div>
+            {% endfor %}{% else %}
+            <div class="sig" style="left: 72pt; top: 120pt">Counterparty: {{ doc.counterparty_name }}<div class="box"></div></div>
+            <div class="sig" style="left: 320pt; top: 120pt">Organisation: {{ settings.ContractSettings.signatory_name }}<div class="box"></div></div>
+            {% endif %}
+          </section>
+
+seed:
+  - entity: ContractType
+    key: [type_name]
+    records:
+      - {type_name: Services Agreement, template: contracts.services_agreement, renewal: New Version}
+      - {type_name: Non-Disclosure Agreement, template: contracts.non_disclosure, renewal: New Contract}
+
+# Contracts made before confidential existed are not confidential.
+backfills:
+  - {name: contract_not_confidential, entity: Contract, needs: "t.confidential is null", set: "confidential = false"}
 
 personal_data:
   - {entity: Contract, match: counterparty_email, name: counterparty_name, retain: "Contracts, and the drafts that led to them, kept as contract law and audit require"}
+  - {entity: Contract, match: signatories.email, retain: "Who signs a contract is part of it, kept as contract law and audit require"}
+  - {entity: Contract, match: readers.email, erase: [readers]}

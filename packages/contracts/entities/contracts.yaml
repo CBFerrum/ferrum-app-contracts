@@ -2,14 +2,40 @@
   label: Contract Settings
   kind: settings
   module: contracts
-  description: "When a contract needs approval, and who signs for the organisation."
+  description: "When a contract needs approval, who signs for the organisation, and when people are reminded."
   fields:
-    - {name: approval_threshold, type: currency, default: 10000, description: "Contracts worth this much or more are approved by a Contract Approver first"}
-    - {name: signatory_name, type: data, required: true, description: "Who signs contracts for the organisation"}
+    - {name: approval_threshold, type: currency, default: 10000, description: "Contracts worth this much or more are approved by a Contract Approver first (read by the package's approval policy, Contract Approval)"}
+    - {name: signatory_name, type: data, required: true, description: "Who signs contracts for the organisation when a contract names no signatories"}
     - {name: signatory_email, type: email, required: true}
+    - {name: reminder_days, type: int, default: 14, min: 0, max: 365, description: "Days before an obligation is due, before a renewal notice date and before a contract ends that their owners are reminded; 0 = no reminders"}
   form:
     - {label: Approval, fields: [approval_threshold]}
     - {label: Signing, fields: [signatory_name, signatory_email]}
+    - {label: Reminders, fields: [reminder_days]}
+
+- name: ContractTypeClause
+  label: Type Clause
+  kind: child
+  fields:
+    - {name: clause, type: link, to: Clause, required: true, in_list: true}
+    - {name: mandatory, type: check, in_list: true, description: "A contract of this type is submitted only with this clause, or its fallback"}
+
+- name: ContractType
+  label: Contract Type
+  label_plural: Contract Types
+  kind: master
+  module: contracts
+  title_field: type_name
+  description: "A kind of contract: the document template its body is made from, its clauses, and how it renews."
+  fields:
+    - {name: type_name, type: data, required: true, unique: true, in_list: true}
+    - {name: template, type: data, required: true, default: contracts.services_agreement, in_list: true,
+       description: "Key of the document template the body of its contracts is made from (Settings, Documents): contracts.services_agreement, contracts.non_disclosure or one of the workspace's own"}
+    - {name: renewal, type: select, options: [New Version, New Contract], default: New Version, in_list: true,
+       description: "What Renew makes: the next term on the same contract as a new version of its body, or a new contract linked to this one"}
+    - {name: clauses, type: table, of: ContractTypeClause, description: "Clauses a new contract of this type starts with, in order"}
+    - {name: disabled, type: check, in_list: true, in_filter: true}
+  list: {columns: [type_name, template, renewal, disabled], sort: type_name asc}
 
 - name: Clause
   label: Clause
@@ -21,7 +47,9 @@
   fields:
     - {name: clause_name, type: data, required: true, unique: true, in_list: true}
     - {name: category, type: select, options: [Payment, Liability, Confidentiality, Termination, Data Protection, Intellectual Property, Other], default: Other, in_list: true, in_filter: true}
-    - {name: text, type: markdown, required: true}
+    - {name: text, type: markdown, required: true,
+       description: "Its wording. {{ doc.<field> }} is filled from the contract it is in (counterparty_name, starts_on, value...) when the contract is drafted"}
+    - {name: fallback, type: link, to: Clause, description: "The wording offered instead when this one is refused: a contract may include it in this one's place"}
     - {name: approved, type: check, in_list: true, in_filter: true}
   list: {columns: [clause_name, category, approved], sort: clause_name asc}
 
@@ -30,7 +58,33 @@
   kind: child
   fields:
     - {name: clause, type: link, to: Clause, required: true, in_list: true}
-    - {name: text, type: markdown, read_only: true, description: "The clause's wording when the contract was drafted"}
+    - {name: text, type: markdown, read_only: true, description: "The clause's wording when the contract was drafted, its merge fields filled"}
+
+- name: ContractSignatory
+  label: Signatory
+  kind: child
+  fields:
+    - {name: name, type: data, required: true, in_list: true}
+    - {name: email, type: email, required: true, in_list: true}
+    - {name: role, type: data, required: true, default: Counterparty, max_length: 60, in_list: true, description: "e.g. Counterparty, Organisation, Witness"}
+    - {name: signing_order, type: int, label: Order, default: 1, min: 1, max: 50, in_list: true, description: "Lower numbers sign first; equal numbers sign at the same time"}
+
+- name: ContractReader
+  label: Reader
+  kind: child
+  fields:
+    - {name: email, type: email, required: true, in_list: true, description: "Someone who may read this contract while it is confidential"}
+
+- name: ContractVersion
+  label: Version
+  kind: child
+  fields:
+    - {name: version_no, type: int, label: Version, read_only: true, in_list: true}
+    - {name: file, type: attach, read_only: true, in_list: true}
+    - {name: sha256, type: data, label: SHA-256, read_only: true}
+    - {name: made_by, type: email, read_only: true, in_list: true}
+    - {name: made_at, type: datetime, read_only: true, in_list: true}
+    - {name: reason, type: data, read_only: true, in_list: true}
 
 - name: Contract
   label: Contract
@@ -39,20 +93,34 @@
   module: contracts
   title_field: title
   description: An agreement from draft to signature and through its term. Its terms are kept once it leaves its draft.
+  search_fields: [counterparty_name, body_text]
+  owner_fields: [owner, readers.email, signatories.email]
   fields:
     - {name: title, type: data, required: true, in_list: true}
-    - {name: contract_type, type: select, options: [Sales, Purchase, Service, Non-Disclosure, Employment, Lease, Other], default: Service, in_list: true, in_filter: true}
+    - {name: kind, type: link, to: ContractType, label: Type, in_list: true, in_filter: true,
+       description: "Its body is made from the type's document template, from its fields, parties and clauses; without a type, the PDF is attached"}
+    - {name: contract_type, type: select, label: Category, options: [Sales, Purchase, Service, Non-Disclosure, Employment, Lease, Other], default: Service, in_list: true, in_filter: true}
     - {name: counterparty_name, type: data, required: true, in_list: true, label: Counterparty}
     - {name: counterparty_email, type: email}
     - {name: owner, type: email, read_only: true, no_copy: true, in_list: true, in_filter: true}
+    - {name: department, type: data, in_filter: true, description: "Read by approval policies that route by department"}
+    - {name: confidential, type: check, default: 0, in_filter: true,
+       description: "Read only by its owner, its readers, its signatories and Legal"}
+    - {name: readers, type: table, of: ContractReader}
     - {name: value, type: currency, default: 0, in_list: true}
     - {name: starts_on, type: date, required: true, in_list: true}
     - {name: ends_on, type: date, required: true, in_list: true}
     - {name: auto_renew, type: check}
     - {name: renewal_months, type: int, default: 12}
     - {name: notice_days, type: int, default: 30, description: "Days before the end by which notice not to renew is given"}
+    - {name: renewal_notice_on, type: date, read_only: true, computed: "isEmpty(doc.ends_on) ? null : addDays(doc.ends_on, -doc.notice_days)",
+       description: "The last day to give notice not to renew"}
+    - {name: signatories, type: table, of: ContractSignatory, description: "Who signs, in order; empty: the counterparty, then the organisation's signatory"}
     - {name: clauses, type: table, of: ContractClause}
-    - {name: document, type: attach, description: "The PDF to sign: part of the terms, so attached before the contract is submitted"}
+    - {name: document, type: attach, description: "The PDF to sign. Made from its type's template when it has one (frozen when it is submitted); otherwise attached before it is submitted"}
+    - {name: document_sha256, type: data, label: Document SHA-256, read_only: true, no_copy: true}
+    - {name: versions, type: table, of: ContractVersion, read_only: true, no_copy: true, description: "Each body frozen from its template, with who and when"}
+    - {name: body_text, type: text, read_only: true, hidden: true, no_copy: true, description: "The words of its latest body, for search"}
     - {name: status, type: select, options: [Draft, In Review, Approved, Out for Signature, Signed, Active, Expired, Terminated], default: Draft, read_only: true, no_copy: true, in_list: true, in_filter: true}
     - {name: approved_by, type: email, read_only: true, no_copy: true}
     - {name: approved_digest, type: data, read_only: true, no_copy: true, label: Approved As,
@@ -62,8 +130,15 @@
     - {name: sign_request, type: link, to: SignRequest, read_only: true, no_copy: true}
     - {name: signed_document, type: attach, read_only: true, no_copy: true}
     - {name: signed_on, type: date, read_only: true, no_copy: true}
+    - {name: signed_elsewhere, type: check, read_only: true, no_copy: true, in_filter: true,
+       description: "Signed outside Ferrum and recorded here: the copy was uploaded, nobody signed it through Sign"}
+    - {name: signed_elsewhere_by, type: text, read_only: true, no_copy: true, description: "Who signed it, as the person recording it said"}
+    - {name: previous, type: link, to: Contract, read_only: true, no_copy: true, in_filter: true, description: "The contract this one renews"}
+    - {name: renewed_by, type: link, to: Contract, read_only: true, no_copy: true, description: "The contract that renews this one"}
     - {name: renewals, type: int, read_only: true, no_copy: true, default: 0}
     - {name: notice_due, type: check, read_only: true, no_copy: true, in_filter: true, description: "Inside the notice period of a contract that renews by itself"}
+    - {name: notice_reminded_for, type: date, read_only: true, hidden: true, no_copy: true}
+    - {name: end_reminded_for, type: date, read_only: true, hidden: true, no_copy: true}
     - {name: terminated_on, type: date, read_only: true, no_copy: true}
     - {name: termination_reason, type: text, read_only: true, no_copy: true}
   actions:
@@ -71,7 +146,21 @@
     - {name: approve_contract, label: Approve It, permission: write, condition: "doc.status == 'In Review'",
        params: [{name: pdf_matches, label: The PDF Says What The Clauses Say, type: check, description: "Read the attached PDF against the clauses: it is what gets signed"}]}
     - {name: reject_contract, label: Send It Back, permission: write, condition: "doc.status == 'In Review'", params: [{name: note, type: text, label: Why, required: true}]}
+    - name: approval_granted
+      label: Approval Granted
+      permission: write
+      hidden: true
+      contract: {completion: "The contract is approved, bound to its terms, its clauses' wording and its PDF as they are now"}
     - {name: send_for_signature, label: Send for Signature, permission: write, condition: "doc.status == 'Approved' && doc.document != null"}
+    - name: record_signed_copy
+      label: Record Signed Copy
+      permission: write
+      condition: "doc.status == 'Draft' || doc.status == 'Approved'"
+      params:
+        - {name: signed_file, type: data, label: Signed Copy, required: true, description: "The uploaded signed PDF (its /files/<id> path)"}
+        - {name: signed_by, type: text, label: Signed By, required: true, description: "Who signed it, on each side"}
+        - {name: signed_on, type: date, label: Signed On, required: true}
+    - {name: renew_contract, label: Renew It, permission: write, condition: "(doc.status == 'Active' || doc.status == 'Expired') && doc.renewed_by == null"}
     - {name: terminate_contract, label: Terminate It, permission: write, condition: "doc.status == 'Signed' || doc.status == 'Active'", params: [{name: reason, type: text, label: Why, required: true}]}
   numbering: {template: "CTR-{YYYY}-{seq:5}"}
   list: {columns: [number, title, counterparty_name, value, ends_on, status], sort: created_at desc}
@@ -82,13 +171,16 @@
   kind: master
   module: contracts
   title_field: description
-  description: Something a contract commits to, owned and due.
+  description: Something a contract commits to, or a milestone in it, owned and due.
   fields:
     - {name: contract, type: link, to: Contract, required: true, in_list: true, in_filter: true}
     - {name: description, type: data, required: true, in_list: true}
+    - {name: kind, type: select, options: [Obligation, Milestone], default: Obligation, in_list: true, in_filter: true}
+    - {name: party, type: select, options: [Us, Counterparty], default: Us, in_filter: true, description: "Whose obligation it is"}
     - {name: owner, type: email, required: true, in_list: true, in_filter: true}
     - {name: due_on, type: date, required: true, in_list: true}
     - {name: status, type: select, options: [Open, Done], default: Open, in_list: true, in_filter: true}
     - {name: done_on, type: date, read_only: true, no_copy: true}
     - {name: overdue, type: check, read_only: true, no_copy: true, in_list: true, in_filter: true}
+    - {name: reminded_for, type: date, read_only: true, hidden: true, no_copy: true}
   list: {columns: [contract, description, owner, due_on, status, overdue], sort: due_on asc}
