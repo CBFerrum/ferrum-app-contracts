@@ -1,6 +1,6 @@
 id: contracts
 name: Contracts
-version: 0.3.0
+version: 0.3.1
 publisher: cbferrum
 summary: "Contracts from types and approved clauses, their body generated and kept by version, approval by policy, signature through Sign to any signatories, renewal, notice, obligations and reminders"
 description: README.md

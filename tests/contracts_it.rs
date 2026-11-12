@@ -278,6 +278,24 @@ async fn scenario() {
         )
         .await["id"]);
     t.act(&cm, signed_one, "submit_contract", Value::Null).await.unwrap();
+    // No PDF service: a body kept as a page is approved and kept, but cannot go for signature, and nothing is left half done.
+    let page = k.store_file(&cm, None, "body.html", "application/octet-stream", b"<style>@page{size:A4}</style><h1>Terms</h1>").await.unwrap();
+    let paged = uid(&t
+        .insert(
+            &cm,
+            "Contract",
+            json!({"title": "Terms as a page", "counterparty_name": "Globex", "counterparty_email": "legal@globex.test", "value": "5000",
+                   "starts_on": start, "ends_on": end, "document": page["url"]}),
+        )
+        .await["id"]);
+    t.act(&cm, paged, "submit_contract", Value::Null).await.unwrap();
+    assert_eq!(t.get("Contract", paged).await["status"], "Approved", "approving and keeping the page still works");
+    refused(t.act(&cm, paged, "send_for_signature", Value::Null).await, "invalid", "FERRUM_PDF_URL");
+    let after = t.get("Contract", paged).await;
+    assert!(after["status"] == "Approved" && after["sign_request"].is_null(), "it stays approved, no request");
+    let orphans =
+        t.k.list(&cm, "SignRequest", &ferrum_kernel::query::ListQuery { search: Some("Terms as a page".into()), ..Default::default() }).await.unwrap();
+    assert!(orphans.rows.is_empty(), "no orphan request");
     // An approval is bound to the wording and the PDF it was given (FEO-038): one over the threshold is
     // approved by someone who read the PDF against the clauses, and goes for signature only as approved.
     let bound = uid(&t

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.1
+
+* **A page cannot be sent for signature, and the refusal says why.** Without a PDF service a typed contract's body is
+  kept as a page (HTML). Send for Signature now reads the file and refuses anything that is not a PDF, whatever
+  its content type says (a page was served as a plain download, so the earlier check by type missed it and Sign
+  answered "the file is not a PDF" later). The message names the missing service, `FERRUM_PDF_URL`. The contract stays
+  Approved with its page as the document, and no request is made. Approving and keeping the page work as before.
+
 ## 0.3.0
 
 Closes the documents audit's tier-1 rows for Contracts (DC-57, 58, 63, 65, 66, 67, 69, 70, 71, 74, 75, 77).
