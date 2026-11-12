@@ -26,15 +26,13 @@ pub(crate) async fn send(k: &Kernel, ctx: &Ctx, tx: &mut Tx, contract: &Doc) -> 
     let document = s(contract, "document").ok_or_else(|| {
         Error::field("document", "it left its draft without the PDF to sign, which is part of its terms: draft it again with the PDF attached")
     })?;
+    // Sign signs a PDF. Where the server has no PDF service a typed contract's body is kept as a page (HTML), and
+    // whatever the content type says, a file that is not a PDF is refused here, before a request is made.
     if let Some(file) = crate::contract::file_of(contract, "document") {
-        let kind: Option<String> = sqlx::query_scalar("select content_type from file_object where tenant_id = $1 and id = $2")
-            .bind(ctx.tenant)
-            .bind(file)
-            .fetch_optional(&mut **tx)
-            .await?;
-        if kind.is_some_and(|t| t.starts_with("text/html")) {
+        let (_, _, bytes) = k.read_file(ctx, file).await?;
+        if !bytes.starts_with(b"%PDF-") {
             return Err(Error::invalid(
-                "its body is a page, not a PDF: this server has no PDF service (FERRUM_PDF_URL). Sign it elsewhere and record the signed copy, or set up the service and submit it again",
+                "its body is a page, not a PDF: this server has no PDF service (FERRUM_PDF_URL), and Sign signs PDFs only. It stays approved with its page as the document: set the service up and send it again, or sign it elsewhere and record the signed copy",
             ));
         }
     }
