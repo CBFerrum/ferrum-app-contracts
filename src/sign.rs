@@ -1,45 +1,102 @@
-//! Signature through Sign. An approved contract with its PDF and the counterparty's address goes to
-//! Sign as a request: the counterparty signs first, then the organisation's signatory, each with a
-//! signature field on the document's last page. Upkeep follows the request: completed, the contract is signed
-//! with the sealed PDF; declined, expired or voided, it is approved again, saying so.
+//! Signature through Sign. An approved contract with its PDF goes to Sign as a request, to its signatories in
+//! their order (equal orders sign at the same time); a contract that names none goes to the counterparty, then the
+//! organisation's signatory. Each signatory's box is on the document's last page, the signature page its type's
+//! template ends with: two columns of blocks, one per signatory in the order listed. Upkeep follows the request:
+//! completed, the contract is signed with the sealed PDF; declined, expired or voided, it is approved again,
+//! saying so.
 
 use crate::obj;
-use ferrum_domain::util::{id, s};
+use ferrum_domain::util::{id, rows, s};
 use ferrum_kernel::{Ctx, Doc, Error, Kernel, Result, Tx};
 use serde_json::{Value, json};
 use uuid::Uuid;
+
+/// Signature blocks a signature page holds: two columns of six.
+pub(crate) const PER_PAGE: usize = 12;
+
+/// Where the `n`th signatory's box (from 0) sits on the signature page, in points from the page's top left, as the
+/// packaged templates lay their blocks out.
+pub(crate) fn place(n: usize) -> (i64, i64) {
+    let x = if n.is_multiple_of(2) { 72 } else { 320 };
+    (x, 120 + (n / 2) as i64 * 110 + 30)
+}
 
 /// Sends `contract` for signature and returns the Sign request's id.
 pub(crate) async fn send(k: &Kernel, ctx: &Ctx, tx: &mut Tx, contract: &Doc) -> Result<Uuid> {
     let document = s(contract, "document").ok_or_else(|| {
         Error::field("document", "it left its draft without the PDF to sign, which is part of its terms: draft it again with the PDF attached")
     })?;
-    let counterparty = s(contract, "counterparty_email").ok_or_else(|| Error::field("counterparty_email", "is where the request goes"))?;
-    let signatory: Option<(Option<String>, Option<String>)> =
-        sqlx::query_as("select signatory_name, signatory_email from e_contract_settings where tenant_id = $1 limit 1")
+    if let Some(file) = crate::contract::file_of(contract, "document") {
+        let kind: Option<String> = sqlx::query_scalar("select content_type from file_object where tenant_id = $1 and id = $2")
             .bind(ctx.tenant)
+            .bind(file)
             .fetch_optional(&mut **tx)
             .await?;
-    let Some((Some(name), Some(email))) = signatory else {
-        return Err(Error::invalid("name the organisation's signatory in Contract Settings first"));
+        if kind.is_some_and(|t| t.starts_with("text/html")) {
+            return Err(Error::invalid(
+                "its body is a page, not a PDF: this server has no PDF service (FERRUM_PDF_URL). Sign it elsewhere and record the signed copy, or set up the service and submit it again",
+            ));
+        }
+    }
+    let listed = rows(contract, "signatories");
+    let signers: Vec<Value> = if listed.is_empty() {
+        let counterparty = s(contract, "counterparty_email").ok_or_else(|| Error::field("counterparty_email", "is where the request goes"))?;
+        let signatory: Option<(Option<String>, Option<String>)> =
+            sqlx::query_as("select signatory_name, signatory_email from e_contract_settings where tenant_id = $1 limit 1")
+                .bind(ctx.tenant)
+                .fetch_optional(&mut **tx)
+                .await?;
+        let Some((Some(name), Some(email))) = signatory else {
+            return Err(Error::invalid("name the organisation's signatory in Contract Settings first, or list the contract's signatories"));
+        };
+        vec![
+            json!({"role": "Counterparty", "name": s(contract, "counterparty_name"), "email": counterparty, "signing_order": 1}),
+            json!({"role": "Organisation", "name": name, "email": email, "signing_order": 2}),
+        ]
+    } else {
+        // Sign tells signers apart by role: a role used twice is numbered.
+        let mut seen = std::collections::HashMap::<String, usize>::new();
+        listed
+            .iter()
+            .map(|r| {
+                let role = s(r, "role").unwrap_or("Signatory").to_string();
+                let n = seen.entry(role.clone()).and_modify(|n| *n += 1).or_insert(1);
+                let role = if *n > 1 { format!("{role} {n}") } else { role };
+                json!({"role": role, "name": s(r, "name"), "email": s(r, "email"), "signing_order": r.get("signing_order").and_then(Value::as_i64).unwrap_or(1)})
+            })
+            .collect()
     };
-    let field = |role: &str, y: i64, page: i64| json!({"role": role, "field_type": "Signature", "label": format!("{role} signature"), "required": true, "page": page, "x": 72, "y": y, "width": 200, "height": 50});
+    if signers.len() > PER_PAGE {
+        return Err(Error::field("signatories", format!("at most {PER_PAGE} fit the signature page")));
+    }
+    let mode = if signers.iter().all(|r| r["signing_order"] == signers[0]["signing_order"]) { "Parallel" } else { "Sequential" };
+    // An attached PDF of a contract with no type and no signatories keeps the two boxes it always had.
+    let legacy = listed.is_empty() && s(contract, "kind").is_none();
+    let fields = |page: i64| -> Value {
+        signers
+            .iter()
+            .enumerate()
+            .map(|(n, r)| {
+                let (x, y) = if legacy { (72, 600 + 80 * n as i64) } else { place(n) };
+                json!({"role": r["role"], "field_type": "Signature", "label": format!("{} signature", r["role"].as_str().unwrap_or_default()), "required": true,
+                       "page": page, "x": x, "y": y, "width": 200, "height": 50})
+            })
+            .collect()
+    };
     let draft = k
         .insert_tx(
             ctx,
             tx,
             "SignRequest",
             obj(json!({
-                "title": s(contract, "title"), "document": document, "signing_mode": "Sequential",
+                "title": s(contract, "title"), "document": document, "signing_mode": mode,
                 "message": match s(contract, "approved_digest") {
                     Some(d) => format!("Please sign {}, approved as {}", s(contract, "title").unwrap_or("the contract"), &d[..12.min(d.len())]),
                     None => format!("Please sign {}", s(contract, "title").unwrap_or("the contract")),
                 },
                 "reference_entity": "Contract", "reference_id": s(contract, "id"),
-                "signers": [
-                    {"role": "Counterparty", "name": s(contract, "counterparty_name"), "email": counterparty, "signing_order": 1},
-                    {"role": "Organisation", "name": name, "email": email, "signing_order": 2}],
-                "fields": [field("Counterparty", 600, 1), field("Organisation", 680, 1)],
+                "signers": signers,
+                "fields": fields(1),
             })),
         )
         .await?;
@@ -47,8 +104,7 @@ pub(crate) async fn send(k: &Kernel, ctx: &Ctx, tx: &mut Tx, contract: &Doc) -> 
     // The signatures go on the last page, once Sign has measured the document.
     let pages = draft.get("page_count").and_then(Value::as_i64).unwrap_or(1);
     if pages > 1 {
-        let fields = json!([field("Counterparty", 600, pages), field("Organisation", 680, pages)]);
-        k.update_tx(ctx, tx, "SignRequest", request, obj(json!({"fields": fields})), None).await?;
+        k.update_tx(ctx, tx, "SignRequest", request, obj(json!({"fields": fields(pages)})), None).await?;
     }
     k.run_action_tx(ctx, tx, "SignRequest", request, "send", &json!({})).await?;
     Ok(request)

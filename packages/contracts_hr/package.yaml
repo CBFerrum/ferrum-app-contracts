@@ -1,0 +1,11 @@
+package: contracts_hr
+version: 0.1.0
+label: Contracts and HR
+description: The employee a contract is with, where HR is installed.
+depends: [contracts, hr]
+field_prefix: hr_
+
+overlays:
+  - entity: Contract
+    ops:
+      - {op: add_field, field: {name: hr_employee, type: link, to: Employee, label: Employee, in_filter: true, description: "The employee this contract is with"}}

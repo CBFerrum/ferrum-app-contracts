@@ -1,0 +1,11 @@
+package: contracts_projects
+version: 0.1.0
+label: Contracts and Projects
+description: The project a contract governs, where the shared projects are installed.
+depends: [contracts, project_records]
+field_prefix: prj_
+
+overlays:
+  - entity: Contract
+    ops:
+      - {op: add_field, field: {name: prj_project, type: link, to: Project, label: Project, in_filter: true, description: "The project this contract governs"}}
