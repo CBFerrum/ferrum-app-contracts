@@ -3,8 +3,8 @@
 //! renewal, notice, obligations and reminders.
 //!
 //! * `contract`: drafts from the clause library, the body made from the type's template and frozen
-//!   at each submit, approval through the workspace's policy (or the threshold), terms kept once out of
-//!   the draft; clauses approved by a Contract Approver; a copy signed elsewhere recorded.
+//!   at each submit, approval through the platform's policy on Approve It, terms kept once out of the
+//!   draft; clauses approved by a Contract Approver; a copy signed elsewhere recorded.
 //! * `sign`: an approved contract sent to Sign, to its signatories in order; followed to its
 //!   signature, or back to approved.
 //! * `term`: signed contracts active from their start, renewed or expired at their end, notice due
@@ -118,7 +118,8 @@ mod tests {
         for f in ["pty_customer", "pty_supplier", "pty_contact", "prj_project", "crm_opportunity", "sel_sales_order", "buy_purchase_order", "hr_employee"] {
             assert!(contract.field(f).is_some(), "{f}");
         }
-        assert!(contract.workflow.is_some(), "the default approval policy comes with the package");
+        let on = ferrum_meta::DocumentAction::Action("approve".into());
+        assert!(contract.document_approvals.contains_key(&on), "the default approval policy comes with the package");
         let alone = ferrum_meta::effective::build(&catalog, &catalog.closure(&["contracts".to_string()]).unwrap(), &[], 1).unwrap();
         assert!(alone.warnings.is_empty() && alone.entity("Contract").unwrap().field("pty_customer").is_none(), "without the others, the typed name only");
     }

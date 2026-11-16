@@ -47,7 +47,7 @@ governs.
 |---|---|
 | **Version** | 0.3.1 (platform `>=0.3.2, <0.4`) |
 | **Kind** | Own interface at `/contracts/`, plus Ferrum's generic records screens for every entity |
-| **What it adds** | 5 main entities and 5 child tables, 3 roles, 1 approval workflow, 4 reports, 2 document templates (print formats), 3 message templates, 1 menu module, 2 seeded contract types |
+| **What it adds** | 5 main entities and 5 child tables, 3 roles, 1 approval policy, 4 reports, 2 document templates (print formats), 3 message templates, 1 menu module, 2 seeded contract types |
 | **Depends on** | Ferrum core and **Sign** (installing Contracts installs Sign) |
 | **Works with** | Sign, Parties (customers and suppliers), CRM, Selling, Buying, HR, Projects, Documents (templates) |
 | **Languages** | English, Arabic (right to left), Hindi; a workspace can change any interface word |
@@ -155,21 +155,19 @@ governs.
 
 ### ✅ Approval by policy
 
-- **Submit It** puts a contract In Review and asks the package's approval workflow, Contract Approval.
+- **Submit It** puts a contract In Review and asks the package's approval policy, on the contract's Approve It.
 - **The default policy.** A contract worth the settings' threshold or more needs one Contract Approver other than
   whoever submitted it, with a reminder after two days. A cheaper contract is approved at once.
-- **Your own policy.** A workspace replaces the workflow on Contract (Customize, workflow) and keeps a transition
-  named `Approve` from its first state. Steps can be set by value band, by type, by department, in order or
-  together, as N of M, with stand-ins and escalation.
+- **Your own policy.** A workspace edits the policy on Contract's Approve It in Customize. Steps can be set by value
+  band, by type, by department, in order or together, as N of M, with stand-ins and escalation. While it waits, the
+  contract stays as it is.
 - **Approvers decide under Approvals.** A rejection sends the contract back to Draft, with the reason, at the next
-  upkeep.
-- **Send It Back.** Returns a contract in review to its draft with a reason that is required.
+  upkeep; so does a request its submitter recalls. Who decided, when and what they said is the request's record.
 - **An approval bound to what was approved.** The approval is bound to a digest of the terms, the clauses' wording
-  and the PDF. The approver also confirms the PDF says what the clauses say. A contract goes for signature only as
+  and the PDF; approving it is saying the PDF says what the clauses say. A contract goes for signature only as
   approved.
-- **Separation of duties.** A contract is approved by someone other than its owner.
-- **Fallback.** A workspace whose workflow has no `Approve` transition gets the single approver this app had
-  before: Approve It and Send It Back.
+- **Separation of duties.** A contract is approved by someone other than whoever submitted it, and submitted by a
+  Contract Manager or Legal.
 
 ### ✍️ Signature
 
@@ -255,7 +253,7 @@ contract when each answers.
 flowchart LR
     A["Draft"] -->|"Submit It"| B["In Review"]
     B -->|"Approved by policy"| C["Approved"]
-    B -->|"Send It Back"| A
+    B -->|"Rejected or recalled"| A
     C -->|"Send for Signature"| D["Out for Signature"]
     D -->|"Declined or expired"| C
     D -->|"Signed in Sign"| E["Signed"]
@@ -314,7 +312,7 @@ records are optional and appear when the matching app is installed.
 | **Reports** | Contracts by State, Contracts Ending or Renewing, Obligations Due, Days from Draft to Signed |
 | **Print formats** | Services agreement, Non-disclosure agreement (each ends in a signature page) |
 | **Messages** | Obligation due, Renewal notice date coming, Contract ending |
-| **Workflow** | Contract Approval (Open to Approved, with approval steps by value) |
+| **Approval policy** | On Approve It: a Contract Approver at the threshold or more |
 | **Upkeep** | Activation, renewal, expiry, notice flags and reminders on a schedule |
 
 ## 🔌 Integrations
@@ -376,7 +374,7 @@ Compared with five contract lifecycle management products: Ironclad, DocuSign CL
 ⁴ Through integrations with external e-signature products as well as, in some cases, their own.
 ⁵ CSV of contracts as drafts, then each signed copy is uploaded and recorded one by one.
 ⁶ Four reports. Studio queries and dashboards can be added; no contract dashboard ships.
-⁷ The approval workflow is editable in Customize; other lifecycle states are fixed in code.
+⁷ The approval policy is editable in Customize; the lifecycle states are fixed in code.
 ⁸ Agiloft offers an on-premises option.
 
 ### 🏆 Where Contracts stands out
@@ -404,6 +402,8 @@ Compared with five contract lifecycle management products: Ironclad, DocuSign CL
 
 ### ✅ Recently shipped
 
+- [x] **0.4.0.** The approval is the platform's policy on Approve It alone: the workflow that carried it, the single
+  approver beside it, Approved By and PDF Checked By are gone.
 - [x] **0.3.1.** Send for Signature refuses a page up front and names the missing PDF service.
 - [x] **0.3.0.** Contract types and generated bodies kept by version, clauses with merge fields and fallbacks,
   parties and governed records as links, approval by policy, signatories in order, signed-elsewhere copies,
@@ -498,12 +498,12 @@ app.yaml                      the app's manifest (version, roles, shell entries,
 Cargo.toml, build.rs          the Rust crate; build.rs embeds packages/ and ui/dist
 src/
   lib.rs                      registers the packages, hooks, reports and the upkeep
-  contract.rs                 submit, approve, send back, clauses, confidentiality rules
+  contract.rs                 submit, approval, clauses, confidentiality rules
   sign.rs                     send for signature and follow the Sign request
   term.rs                     activation, renewal, expiry, notice and reminders
   reports.rs                  the four reports
 packages/
-  contracts/                  entities, roles, approval workflow, messages, templates, seed types
+  contracts/                  entities, roles, approval policy, messages, templates, seed types
   contracts_parties|crm|selling|buying|projects|hr/   one link field each
 ui/src/                       the interface at /contracts/ (home queues, locales ar and hi)
 tests/contracts_it.rs         the year-of-contracts walk
