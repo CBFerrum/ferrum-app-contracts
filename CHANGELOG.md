@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.1
+
+* **Whoever submitted a contract cannot approve it, however its approval is asked.** A rejected or recalled request
+  leaves the contract In Review until the upkeep sends it back to its draft. Until now, in that while, another Contract
+  Manager or Legal could ask Approve It directly (`POST /api/v1/Contract/{id}/actions/approve`) in their own name, and
+  whoever pressed Submit It, if a Contract Approver, was no longer the one who asked: they could decide it, and the
+  contract was Approved. Submit It now records who submitted it (Submitted By), and Approve It is asked only by them;
+  anyone else is refused.
+
 ## 0.4.0
 
 The approval is the platform's policy, on the contract's own action, and nothing beside it.

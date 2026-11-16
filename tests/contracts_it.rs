@@ -270,6 +270,10 @@ async fn scenario() {
     t.k.decide_approval(&ca, "Contract", big, false, Some("Cap the liability")).await.expect("sent back");
     // Asked again directly before upkeep, by an approver who does not draft contracts: refused, as through Submit It.
     refused(t.act(&ca, big, "approve", Value::Null).await, "invalid", "a Contract Manager or Legal asks");
+    // Asked again directly before upkeep by another Contract Manager, in their own name, whoever submitted it could decide
+    // it: only whoever submitted it asks again.
+    refused(t.act(&cm, big, "approve", Value::Null).await, "invalid", "only by whoever submitted it");
+    assert_eq!(t.status(big).await, "In Review", "nothing asked, nothing approved");
     ferrum_app_contracts::maintenance_on(&k, today).await.unwrap();
     assert_eq!(
         (t.status(big).await, t.get("Contract", big).await["decision_note"].as_str().map(str::to_string)),

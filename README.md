@@ -166,8 +166,9 @@ governs.
 - **An approval bound to what was approved.** The approval is bound to a digest of the terms, the clauses' wording
   and the PDF; approving it is saying the PDF says what the clauses say. A contract goes for signature only as
   approved.
-- **Separation of duties.** A contract is approved by someone other than whoever submitted it, and submitted by a
-  Contract Manager or Legal.
+- **Separation of duties.** A contract is approved by someone other than whoever submitted it (Submitted By), and
+  submitted by a Contract Manager or Legal. Only whoever submitted it asks for its approval, so asking again some other
+  way is no way around it.
 
 ### ✍️ Signature
 
@@ -402,6 +403,8 @@ Compared with five contract lifecycle management products: Ironclad, DocuSign CL
 
 ### ✅ Recently shipped
 
+- [x] **0.4.1.** Whoever submitted a contract cannot approve it, however its approval is asked: only they ask it
+  again (Submitted By).
 - [x] **0.4.0.** The approval is the platform's policy on Approve It alone: the workflow that carried it, the single
   approver beside it, Approved By and PDF Checked By are gone.
 - [x] **0.3.1.** Send for Signature refuses a page up front and names the missing PDF service.
