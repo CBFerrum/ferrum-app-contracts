@@ -125,6 +125,7 @@
     - {name: approved_digest, type: data, read_only: true, no_copy: true, label: Approved As,
        description: "The SHA-256 of its terms, its clauses' wording and its PDF as they were approved: sent for signature only while they are still the same"}
     - {name: decision_note, type: text, read_only: true, no_copy: true}
+    - {name: submitted_by, type: email, read_only: true, no_copy: true, description: "Who last submitted it: the only one who asks for its approval"}
     - {name: sign_request, type: link, to: SignRequest, read_only: true, no_copy: true}
     - {name: signed_document, type: attach, read_only: true, no_copy: true}
     - {name: signed_on, type: date, read_only: true, no_copy: true}
@@ -145,9 +146,10 @@
       label: Approve It
       permission: write
       hidden: true
-      # Asked by whoever drafts and keeps contracts, not by whoever decides them, however it is asked.
-      condition: "doc.status == 'In Review' && (user.is_admin || 'Contract Manager' in user.roles || 'Legal' in user.roles)"
-      condition_message: "a Contract Manager or Legal asks for a contract's approval"
+      # Asked by whoever drafts and keeps contracts, not by whoever decides them, and only by whoever submitted it, however
+      # it is asked: asked again by anyone else, whoever submitted it could decide it.
+      condition: "doc.status == 'In Review' && doc.submitted_by == user.email && (user.is_admin || 'Contract Manager' in user.roles || 'Legal' in user.roles)"
+      condition_message: "a Contract Manager or Legal asks for a contract's approval, by Submit It; asked again, only by whoever submitted it"
       contract: {completion: "The contract is approved, bound to its terms, its clauses' wording and its PDF as they are now"}
     - {name: send_for_signature, label: Send for Signature, permission: write, condition: "doc.status == 'Approved' && doc.document != null"}
     - name: record_signed_copy

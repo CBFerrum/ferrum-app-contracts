@@ -285,6 +285,7 @@ impl DocHook for ContractHook {
                 }
                 values.insert("status".into(), json!("In Review"));
                 values.insert("decision_note".into(), Value::Null);
+                values.insert("submitted_by".into(), json!(hc.ctx.email));
                 hc.kernel.set_values_tx(&system, hc.tx, "Contract", contract, values).await?;
                 // The policy asks whoever it names, or lets it through at once: Approve It then approves it here.
                 let out = hc.kernel.run_action_tx(hc.ctx, hc.tx, "Contract", contract, "approve", &json!({})).await?;
