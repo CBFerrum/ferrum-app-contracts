@@ -13,7 +13,7 @@ import "./styles.css";
 // Its own words in the page's language (src/locales), fetched as the page starts; it is drawn once they are in.
 void addCatalogs({ ar: () => import("./locales/ar.json"), hi: () => import("./locales/hi.json") });
 
-const page = (name: "FormView" | "ListView" | "ReportView" | "AppSettingsPage" | "ScreenPage") => () => import("./records").then((m) => ({ Component: m[name] }));
+const page = (name: "FormView" | "ListView" | "ReportView") => () => import("./records").then((m) => ({ Component: m[name] }));
 
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false, staleTime: 5_000 } } });
 
@@ -52,8 +52,6 @@ const router = createBrowserRouter(
         { path: "e/:entity", lazy: page("ListView") },
         { path: "e/:entity/:id", lazy: page("FormView") },
         { path: "r/:name", lazy: page("ReportView") },
-        { path: "apps/:app/settings", lazy: page("AppSettingsPage") },
-        { path: "x/:app/:page", lazy: page("ScreenPage") },
         { path: "*", element: <NotFound /> },
       ],
     },

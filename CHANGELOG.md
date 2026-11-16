@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.2
+
+Needs the same platform as 0.4.1. No database change. Interface only, `ui/dist` rebuilt with Ferrum-Frontend `06bd1a2`.
+
+- The two routes to the screens apps no longer have (`apps/:app/settings`, `x/:app/:page`) are gone.
+- The interface lint has no baseline file any more. The page still starts by its own code, not `mountApp`, because it keeps 5 seconds of freshness for what it reads and `mountApp` fixes 30.
+
 ## 0.4.1
 
 * **Whoever submitted a contract cannot approve it, however its approval is asked.** A rejected or recalled request
