@@ -160,6 +160,16 @@ fn refused<V: std::fmt::Debug>(r: Result<V, Error>, kind: &str, says: &str) {
     assert!(ok && msg.contains(says), "expected {kind} saying {says:?}, got {msg}");
 }
 
+/// What opens the test's vault: the database password of `url`, with Argon2id kept cheap for tests.
+fn opener(url: &str) -> ferrum_kernel::vault::Opener {
+    ferrum_kernel::vault::Opener {
+        database_url: url.to_string(),
+        file: "/nonexistent/root.key".into(),
+        kdf: ferrum_kernel::vault::Kdf { m_kib: 64, t: 1, p: 1 },
+        ..Default::default()
+    }
+}
+
 #[test]
 fn a_year_of_contracts() {
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().thread_stack_size(16 << 20).build().unwrap();
@@ -168,8 +178,10 @@ fn a_year_of_contracts() {
 
 async fn scenario() {
     let url = std::env::var("FERRUM_CONTRACTS_TEST_DATABASE_URL").unwrap_or_else(|_| "postgres://ferrum:ferrum@localhost:5432/ferrum_contracts_test".into());
-    let db = Db::connect(DbConfig { url, max_connections: 16, ..Default::default() }).await.expect("connect");
-    sqlx::raw_sql("drop schema if exists public cascade; create schema public;").execute(&db.pool).await.expect("reset");
+    let db = Db::connect(DbConfig { url: url.clone(), max_connections: 16, ..Default::default() }).await.expect("connect");
+    sqlx::raw_sql("drop schema if exists vault cascade; drop schema if exists public cascade; create schema public;").execute(&db.pool).await.expect("reset");
+    // The vault, opened as a server opens it, before the kernel boots.
+    ferrum_kernel::vault::open(&db, opener(&url), false).await.expect("the vault");
     let mut packages = ferrum_domain::packages().expect("platform packages");
     packages.extend(ferrum_app_sign::packages().expect("Sign's packages"));
     // Its connectors to apps not built here (CRM, ERP's selling and buying, HR) wait for those apps.
@@ -180,7 +192,9 @@ async fn scenario() {
     let catalog = Catalog::from_packages(packages).expect("catalog");
     let mut hooks = HookRegistry::default();
     ferrum_domain::register(&mut hooks);
-    ferrum_app_sign::register(&mut hooks);
+    let sign_packages: Vec<String> = ferrum_app_sign::packages().unwrap().iter().map(|p| p.name().to_string()).collect();
+    hooks.app("sign", &sign_packages, ferrum_app_sign::register);
+    hooks.own("sign", &sign_packages);
     ferrum_app_contracts::register(&mut hooks);
     let settings = KernelSettings { secret_key: Some(SecretKey::new([7u8; 32])), pdf_url: Some(fake_pdf_renderer().await), ..Default::default() };
     let k = Kernel::boot(db, catalog, hooks, settings, None).await.expect("boot");
