@@ -3,8 +3,7 @@
 //! reset first), with Sign installed and a stand-in PDF service: contracts drafted from approved clauses only,
 //! their wording kept and merge fields filled; a contract type's body frozen as a version at each submit;
 //! approved through the package's approval policy (at once below the threshold, by another approver above
-//! it, sent back with a reason) or the single approver when a workspace has no policy; their terms kept
-//! once out of the draft; sent to Sign to their signatories in order and followed to their signature or
+//! it, sent back with a reason), the contract held as it is meanwhile; their terms kept once out of the draft; sent to Sign to their signatories in order and followed to their signature or
 //! back; a copy signed elsewhere recorded; active from their start, renewed or expired at their end,
 //! notice due before a renewal; reminders sent once, even by two upkeeps at once; renewed as a new
 //! version or a new contract; terminated saying why; obligations overdue and done; reports; confidential
@@ -248,6 +247,7 @@ async fn scenario() {
     let small = t.insert(&cm, "Contract", contract("Support plan", "5000", start.clone(), end.clone(), vec![pay])).await;
     assert_eq!((small["owner"].as_str(), small["clauses"][0]["text"].as_str()), (Some("cm@northwind.test"), Some("Invoices are paid within 30 days.")));
     let small = uid(&small["id"]);
+    refused(t.act(&ca, small, "submit_contract", Value::Null).await, "invalid", "a Contract Manager or Legal asks");
     t.act(&cm, small, "submit_contract", Value::Null).await.unwrap();
     assert_eq!(t.status(small).await, "Approved", "below the threshold");
     refused(t.set(&cm, "Contract", small, json!({"value": "4000"})).await, "invalid", "keeps its terms");
@@ -260,9 +260,16 @@ async fn scenario() {
     let asked = t.act(&both, big, "submit_contract", Value::Null).await.unwrap();
     assert!(asked["approval"]["steps"][0]["label"].as_str().is_some(), "asked: {asked}");
     assert_eq!(t.status(big).await, "In Review");
-    refused(t.act(&ca, big, "approve_contract", Value::Null).await, "invalid", "decide it under Approvals");
+    // The policy is the only way to Approved: running its action again asks nothing new and approves nothing.
+    assert!(t.act(&both, big, "approve", Value::Null).await.is_err(), "the approval is the policy's");
+    assert_eq!(t.status(big).await, "In Review");
+    // While it waits, the contract stays as it is (the policy's lock), its title too.
+    let held = t.set(&both, "Contract", big, json!({"title": "Platform licence, renamed"})).await;
+    assert!(held.as_ref().is_err_and(|e| e.to_string().contains("stays as it is")), "{held:?}");
     refused(t.k.decide_approval(&both, "Contract", big, true, None).await, "forbidden", "");
     t.k.decide_approval(&ca, "Contract", big, false, Some("Cap the liability")).await.expect("sent back");
+    // Asked again directly before upkeep, by an approver who does not draft contracts: refused, as through Submit It.
+    refused(t.act(&ca, big, "approve", Value::Null).await, "invalid", "a Contract Manager or Legal asks");
     ferrum_app_contracts::maintenance_on(&k, today).await.unwrap();
     assert_eq!(
         (t.status(big).await, t.get("Contract", big).await["decision_note"].as_str().map(str::to_string)),
@@ -273,9 +280,11 @@ async fn scenario() {
     t.act(&both, big, "submit_contract", Value::Null).await.unwrap();
     t.k.decide_approval(&ca, "Contract", big, true, None).await.expect("approved by another");
     let approved = t.get("Contract", big).await;
-    assert_eq!((approved["status"].as_str(), approved["approved_by"].as_str()), (Some("Approved"), Some("ca@northwind.test")));
+    assert_eq!(approved["status"].as_str(), Some("Approved"));
     assert!(approved["approved_digest"].as_str().is_some_and(|d| d.len() == 64), "bound to what was approved: {approved:?}");
-    assert!(approved["pdf_checked_by"].is_null(), "it has no PDF to read");
+    // Who approved it is the platform's record of the request.
+    let record = t.k.approval_of(&t.admin, "Contract", big).await.unwrap();
+    assert_eq!((record["status"].as_str(), record["decisions"][0]["decider"].clone()), (Some("approved"), json!(ca.user.to_string())), "{record}");
 
     // ───────────── signature through Sign ─────────────
     refused(t.act(&cm, small, "send_for_signature", Value::Null).await, "invalid", "is not available");
@@ -322,7 +331,12 @@ async fn scenario() {
         .await["id"]);
     t.act(&cm, bound, "submit_contract", Value::Null).await.unwrap();
     t.k.decide_approval(&ca, "Contract", bound, true, Some("The PDF says what the clauses say")).await.expect("approved, its PDF read");
-    assert_eq!(t.get("Contract", bound).await["pdf_checked_by"], "ca@northwind.test");
+    let record = t.k.approval_of(&t.admin, "Contract", bound).await.unwrap();
+    assert_eq!(
+        (record["decisions"][0]["decider"].clone(), record["decisions"][0]["comment"].as_str()),
+        (json!(ca.user.to_string()), Some("The PDF says what the clauses say")),
+        "{record}"
+    );
     // Past the guards that keep its terms, straight into its tables: its wording or its PDF changed.
     let behind = |sql: &'static str, value: String| {
         let k = k.clone();
@@ -641,22 +655,4 @@ async fn scenario() {
     // ───────────── who may do what ─────────────
     refused(t.k.insert(&ca, "Contract", obj(contract("Mine", "1", start.clone(), end.clone(), vec![]))).await, "forbidden", "");
     refused(t.k.insert(&ca, "Obligation", obj(ob("Mine", today.to_string()))).await, "forbidden", "");
-
-    // ───────────── a workspace with no approval policy: the single approver it had before ─────────────
-    let none: ferrum_meta::OverlayOp = serde_json::from_value(json!({"op": "set_workflow", "workflow": {
-        "name": "Contract Steps", "entity": "Contract", "initial_state": "Open",
-        "states": [{"name": "Open"}, {"name": "Filed"}], "transitions": [{"action": "File", "from": "Open", "to": "Filed"}]}}))
-    .unwrap();
-    k.add_customization(&t.admin, "Contract", none, None).await.expect("a workflow without Approve");
-    let cm = t.user("cm3@northwind.test", &["Contract Manager"]).await;
-    let ca = t.user("ca3@northwind.test", &["Contract Approver"]).await;
-    let old_way = uid(&t.insert(&cm, "Contract", contract("Old way", "250000", start.clone(), end.clone(), vec![pay])).await["id"]);
-    t.act(&cm, old_way, "submit_contract", Value::Null).await.unwrap();
-    assert_eq!(t.status(old_way).await, "In Review");
-    refused(t.act(&cm, old_way, "approve_contract", Value::Null).await, "forbidden", "a Contract Approver decides");
-    t.act(&ca, old_way, "approve_contract", Value::Null).await.expect("the single approver");
-    assert_eq!(
-        (t.status(old_way).await, t.get("Contract", old_way).await["approved_by"].as_str().map(str::to_string)),
-        ("Approved".to_string(), Some("ca3@northwind.test".to_string()))
-    );
 }

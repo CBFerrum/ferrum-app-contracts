@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.0
+
+The approval is the platform's policy, on the contract's own action, and nothing beside it.
+
+* **The policy is on Approve It** (package.yaml, `approvals`), a hidden action of Contract, instead of on a workflow
+  of its own. Submit It runs it as whoever submitted: at the threshold or more a Contract Approver other than them
+  decides under Approvals, below it the contract is approved at once (No approval step applied); while it waits the
+  contract stays as it is. A workspace edits the policy in Customize. The Contract Approval workflow, and with it
+  the hidden Approval Granted, are gone.
+* **One way to approve.** Approve It and Send It Back, the single approver kept for a workspace whose workflow had no
+  Approve transition, are gone, and so are Approved By and PDF Checked By: who decided, when and what they said is
+  the approval request's record. A request recalled, or approved but refused when done, sends the contract back to
+  its draft as a rejection does.
+* A Contract Manager or Legal asks for the approval, as the Approve transition's roles said: Approve It's condition,
+  so asking it directly is no way around Submit It (a Contract Approver who drafts nothing is refused either way, now
+  as invalid rather than forbidden).
+* The approval stays bound to the terms, the clauses' wording and the PDF (Approved As), checked before signature.
+
 ## 0.3.1
 
 * **A page cannot be sent for signature, and the refusal says why.** Without a PDF service a typed contract's body is

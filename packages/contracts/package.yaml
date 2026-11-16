@@ -1,5 +1,5 @@
 package: contracts
-version: 0.2.0
+version: 0.3.0
 label: Contracts
 description: "Contracts from contract types and approved clauses, their body generated and kept by version, approval by policy, signature through Sign, activation, renewal, notice, obligations and reminders"
 depends: [core, sign]
@@ -38,30 +38,17 @@ roles:
       - {entity: ContractType, read: true}
       - {entity: Obligation, read: true, write: true, create: true, export: true}
 
-# Approval by policy (docs/api.md, "Approvals on a transition"): Submit It takes Approve, which asks a Contract
-# Approver other than whoever submitted when the contract is worth the threshold or more, and goes through at once
-# otherwise. A workspace replaces this workflow with its own (more steps, value bands, a type or a department,
-# stand-ins and escalation) keeping a transition named Approve from its first state; without one, Submit It falls
-# back to the single approver it had before.
-workflows:
-  - name: Contract Approval
-    entity: Contract
-    initial_state: Open
-    states:
-      - {name: Open}
-      - {name: Approved}
-    transitions:
-      - action: Approve
-        from: Open
-        to: Approved
-        roles: [Contract Manager, Legal]
-        condition: "doc.status == 'In Review'"
-        effects:
-          - {type: invoke, capability: contracts.contract.approval_granted, input: {id: "doc.id"}}
-        approval:
-          steps:
-            - {label: Contract Approver, approvers: {role: Contract Approver}, when: "doc.value >= settings.ContractSettings.approval_threshold", remind_after: P2D}
-          lock: true
+# Approval by policy (docs/api.md, "Approvals"): Submit It runs the hidden action Approve It as whoever submitted,
+# which asks a Contract Approver other than them when the contract is worth the threshold or more, and goes through
+# at once otherwise; the contract stays as it is while it waits. A workspace edits the policy in Customize (more
+# steps, value bands, a type or a department, stand-ins and escalation) without code.
+approvals:
+  - entity: Contract
+    on: {action: approve}
+    policy:
+      steps:
+        - {label: Contract Approver, approvers: {role: Contract Approver}, when: "doc.value >= settings.ContractSettings.approval_threshold", remind_after: P2D}
+      lock: true
 
 messages:
   - key: contracts.obligation_due

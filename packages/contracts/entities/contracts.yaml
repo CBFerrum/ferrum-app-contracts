@@ -4,7 +4,7 @@
   module: contracts
   description: "When a contract needs approval, who signs for the organisation, and when people are reminded."
   fields:
-    - {name: approval_threshold, type: currency, default: 10000, description: "Contracts worth this much or more are approved by a Contract Approver first (read by the package's approval policy, Contract Approval)"}
+    - {name: approval_threshold, type: currency, default: 10000, description: "Contracts worth this much or more are approved by a Contract Approver first (read by the package's approval policy on Approve It)"}
     - {name: signatory_name, type: data, required: true, description: "Who signs contracts for the organisation when a contract names no signatories"}
     - {name: signatory_email, type: email, required: true}
     - {name: reminder_days, type: int, default: 14, min: 0, max: 365, description: "Days before an obligation is due, before a renewal notice date and before a contract ends that their owners are reminded; 0 = no reminders"}
@@ -122,10 +122,8 @@
     - {name: versions, type: table, of: ContractVersion, read_only: true, no_copy: true, description: "Each body frozen from its template, with who and when"}
     - {name: body_text, type: text, read_only: true, hidden: true, no_copy: true, description: "The words of its latest body, for search"}
     - {name: status, type: select, options: [Draft, In Review, Approved, Out for Signature, Signed, Active, Expired, Terminated], default: Draft, read_only: true, no_copy: true, in_list: true, in_filter: true}
-    - {name: approved_by, type: email, read_only: true, no_copy: true}
     - {name: approved_digest, type: data, read_only: true, no_copy: true, label: Approved As,
        description: "The SHA-256 of its terms, its clauses' wording and its PDF as they were approved: sent for signature only while they are still the same"}
-    - {name: pdf_checked_by, type: email, read_only: true, no_copy: true, label: PDF Checked By, description: "Who read the PDF against the clauses and said it says what they say"}
     - {name: decision_note, type: text, read_only: true, no_copy: true}
     - {name: sign_request, type: link, to: SignRequest, read_only: true, no_copy: true}
     - {name: signed_document, type: attach, read_only: true, no_copy: true}
@@ -143,13 +141,13 @@
     - {name: termination_reason, type: text, read_only: true, no_copy: true}
   actions:
     - {name: submit_contract, label: Submit It, permission: write, condition: "doc.status == 'Draft'"}
-    - {name: approve_contract, label: Approve It, permission: write, condition: "doc.status == 'In Review'",
-       params: [{name: pdf_matches, label: The PDF Says What The Clauses Say, type: check, description: "Read the attached PDF against the clauses: it is what gets signed"}]}
-    - {name: reject_contract, label: Send It Back, permission: write, condition: "doc.status == 'In Review'", params: [{name: note, type: text, label: Why, required: true}]}
-    - name: approval_granted
-      label: Approval Granted
+    - name: approve
+      label: Approve It
       permission: write
       hidden: true
+      # Asked by whoever drafts and keeps contracts, not by whoever decides them, however it is asked.
+      condition: "doc.status == 'In Review' && (user.is_admin || 'Contract Manager' in user.roles || 'Legal' in user.roles)"
+      condition_message: "a Contract Manager or Legal asks for a contract's approval"
       contract: {completion: "The contract is approved, bound to its terms, its clauses' wording and its PDF as they are now"}
     - {name: send_for_signature, label: Send for Signature, permission: write, condition: "doc.status == 'Approved' && doc.document != null"}
     - name: record_signed_copy

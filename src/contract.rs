@@ -1,9 +1,9 @@
 //! Contracts and clauses. A contract is drafted from approved clauses, their wording kept as it was
 //! when drafted, merge fields filled from the contract. One with a type has a body made from the type's
-//! document template, frozen as a file each time it is submitted (each kept, as a version). Submitted, it
-//! goes through the workspace's approval policy (the package's Contract Approval workflow); without one, one
-//! worth less than the threshold is approved and one worth more waits for a Contract Approver who does not own
-//! it. Once out of its draft, a contract keeps its terms. Only a Contract Approver approves a clause for use.
+//! document template, frozen as a file each time it is submitted (each kept, as a version). Submitted, it goes
+//! through the approval policy on its hidden action Approve It (package.yaml, `approvals`): the platform decides who
+//! approves; this file binds what was approved (its digest) and follows the request's end. Once out of its draft, a
+//! contract keeps its terms. Only a Contract Approver approves a clause for use.
 
 use crate::obj;
 use async_trait::async_trait;
@@ -13,9 +13,6 @@ use ferrum_kernel::{Ctx, Doc, DocHook, Error, HookCtx, Kernel, Result, Tx};
 use rust_decimal::Decimal;
 use serde_json::{Value, json};
 use uuid::Uuid;
-
-/// The transition Submit It takes when the contract's workflow has it (the package's, or a workspace's own).
-pub(crate) const APPROVE: &str = "Approve";
 
 pub(crate) fn approver(ctx: &Ctx) -> bool {
     ctx.is_admin || ctx.roles.iter().any(|r| r == "Contract Approver")
@@ -140,24 +137,6 @@ pub(crate) async fn freeze(k: &Kernel, tx: &mut Tx, ctx: &Ctx, doc: &Doc, by: &s
     Ok(Some(obj(json!({"document": made.url, "document_sha256": made.sha256, "body_text": words}))))
 }
 
-/// Whether the contract's workflow (the package's Contract Approval, or a workspace's own) has the Approve
-/// transition from the state the contract is in.
-fn has_approve(ctx: &Ctx, doc: &Doc) -> bool {
-    let Some(wf) = ctx.schema.entity("Contract").and_then(|e| e.workflow.as_ref()) else { return false };
-    let state = s(doc, "workflow_state").unwrap_or(&wf.def.initial_state);
-    wf.def.transitions.iter().any(|t| t.action == APPROVE && t.from == state)
-}
-
-/// A platform approval waiting on the contract.
-async fn pending_approval(tx: &mut Tx, ctx: &Ctx, contract: Uuid) -> Result<bool> {
-    Ok(sqlx::query_scalar::<_, i32>("select 1 from approval_request where tenant_id = $1 and entity = 'Contract' and record_id = $2 and status = 'pending'")
-        .bind(ctx.tenant)
-        .bind(contract)
-        .fetch_optional(&mut **tx)
-        .await?
-        .is_some())
-}
-
 /// The clauses its type makes mandatory that it does not include, neither the clause nor its fallback.
 async fn missing_mandatory(tx: &mut Tx, ctx: &Ctx, doc: &Doc) -> Result<Vec<String>> {
     let Some(kind) = id(doc, "kind") else { return Ok(vec![]) };
@@ -175,29 +154,15 @@ async fn missing_mandatory(tx: &mut Tx, ctx: &Ctx, doc: &Doc) -> Result<Vec<Stri
     Ok(missing)
 }
 
-/// Who approved the contract in its latest approval request (the last to approve), if anyone decided.
-async fn decided_by(tx: &mut Tx, ctx: &Ctx, contract: Uuid) -> Result<Option<String>> {
-    Ok(sqlx::query_scalar(
-        "select lower(u.email) from approval_request r join approval_decision d on d.tenant_id = r.tenant_id and d.request_id = r.id \
-         join app_user u on u.tenant_id = d.tenant_id and u.id = d.decider \
-         where r.tenant_id = $1 and r.entity = 'Contract' and r.record_id = $2 and d.outcome = 'approve' and not d.void \
-         order by r.created_at desc, d.at desc limit 1",
-    )
-    .bind(ctx.tenant)
-    .bind(contract)
-    .fetch_optional(&mut **tx)
-    .await?)
-}
-
-/// Contracts in review whose approval ended without approving them (rejected, recalled, cancelled): back to their
-/// draft, saying why. An approval that completes moves the contract itself (the transition's effect).
+/// Contracts in review whose approval ended without approving them (rejected, recalled, cancelled, or approved but
+/// refused when done): back to their draft, saying why. An approval that completes approves the contract itself.
 pub(crate) async fn follow_approvals(k: &Kernel, ctx: &Ctx, tx: &mut Tx) -> Result<()> {
     let ended: Vec<(Uuid, String, Option<String>)> = sqlx::query_as(
-        "select c.id, r.status, (select d.comment from approval_decision d where d.tenant_id = r.tenant_id and d.request_id = r.id \
-           and d.outcome = 'reject' order by d.at desc limit 1) \
+        "select c.id, r.status, coalesce((select d.comment from approval_decision d where d.tenant_id = r.tenant_id and d.request_id = r.id \
+           and d.outcome = 'reject' order by d.at desc limit 1), r.failure) \
          from e_contract c join lateral (select * from approval_request r where r.tenant_id = c.tenant_id and r.entity = 'Contract' \
            and r.record_id = c.id order by r.created_at desc limit 1) r on true \
-         where c.tenant_id = $1 and c.status = 'In Review' and r.status in ('rejected', 'recalled', 'cancelled') order by c.id for update of c",
+         where c.tenant_id = $1 and c.status = 'In Review' and r.status in ('rejected', 'recalled', 'cancelled', 'failed') order by c.id for update of c",
     )
     .bind(ctx.tenant)
     .fetch_all(&mut **tx)
@@ -315,73 +280,26 @@ impl DocHook for ContractHook {
                 let mut values = Doc::new();
                 let first = rows(doc, "versions").is_empty();
                 let reason = if first { "Submitted" } else { "Submitted again" };
-                let mut current = doc.clone();
                 if let Some(body) = freeze(hc.kernel, hc.tx, &system, doc, &hc.ctx.email, reason).await? {
-                    current.extend(body.clone());
                     values.extend(body);
                 }
-                if has_approve(hc.ctx, doc) {
-                    values.insert("status".into(), json!("In Review"));
-                    values.insert("decision_note".into(), Value::Null);
-                    hc.kernel.set_values_tx(&system, hc.tx, "Contract", contract, values).await?;
-                    // The policy asks whoever it names, or lets it through at once; the transition's effect approves it.
-                    let out = hc.kernel.transition_tx(hc.ctx, hc.tx, "Contract", contract, APPROVE, None).await?;
-                    let status: Option<String> = sqlx::query_scalar("select status from e_contract where tenant_id = $1 and id = $2")
-                        .bind(hc.ctx.tenant)
-                        .bind(contract)
-                        .fetch_one(&mut **hc.tx)
-                        .await?;
-                    return Ok(Some(json!({"status": status, "approval": out.get("_approval")})));
+                values.insert("status".into(), json!("In Review"));
+                values.insert("decision_note".into(), Value::Null);
+                hc.kernel.set_values_tx(&system, hc.tx, "Contract", contract, values).await?;
+                // The policy asks whoever it names, or lets it through at once: Approve It then approves it here.
+                let out = hc.kernel.run_action_tx(hc.ctx, hc.tx, "Contract", contract, "approve", &json!({})).await?;
+                if out.get("_approval").is_none() {
+                    hc.kernel.set_values_tx(&system, hc.tx, "Contract", contract, obj(json!({"decision_note": "No approval step applied"}))).await?;
                 }
-                // No approval policy: the threshold the app had before.
-                let threshold: Option<Decimal> = sqlx::query_scalar("select approval_threshold from e_contract_settings where tenant_id = $1 limit 1")
+                let status: Option<String> = sqlx::query_scalar("select status from e_contract where tenant_id = $1 and id = $2")
                     .bind(hc.ctx.tenant)
-                    .fetch_optional(&mut **hc.tx)
-                    .await?
-                    .flatten();
-                if d(doc, "value") < threshold.unwrap_or(Decimal::ZERO) {
-                    // Nobody compared its PDF with its clauses: the approval says so by naming no one.
-                    values.insert("status".into(), json!("Approved"));
-                    values.insert("decision_note".into(), json!("Below the approval threshold"));
-                    values.insert("approved_digest".into(), json!(approved_digest(hc.tx, hc.ctx, &current).await?));
-                } else {
-                    values.insert("status".into(), json!("In Review"));
-                }
-                Value::Object(values)
+                    .bind(contract)
+                    .fetch_one(&mut **hc.tx)
+                    .await?;
+                return Ok(Some(json!({"status": status, "approval": out.get("_approval")})));
             }
-            "approval_granted" => {
-                // The approval policy is satisfied (or asked nobody): bound to what it was given.
-                if s(doc, "status") != Some("In Review") {
-                    return Ok(Some(json!({"status": s(doc, "status")})));
-                }
-                let by = decided_by(hc.tx, hc.ctx, contract).await?;
-                let checked = s(doc, "document").is_some() && by.is_some();
-                json!({"status": "Approved", "approved_by": by, "approved_digest": approved_digest(hc.tx, hc.ctx, doc).await?,
-                       "decision_note": if by.is_none() { json!("No approval step applied") } else { Value::Null },
-                       "pdf_checked_by": if checked { json!(by) } else { Value::Null }})
-            }
-            "approve_contract" | "reject_contract" => {
-                if pending_approval(hc.tx, hc.ctx, contract).await? {
-                    return Err(Error::invalid("it waits on its approval policy: decide it under Approvals"));
-                }
-                if !approver(hc.ctx) {
-                    return Err(Error::Forbidden("a Contract Approver decides a contract".into()));
-                }
-                if s(doc, "owner").is_some_and(|o| o.eq_ignore_ascii_case(&hc.ctx.email)) {
-                    return Err(Error::Forbidden("a contract is approved by someone other than its owner".into()));
-                }
-                if name == "approve_contract" {
-                    // The PDF is what gets signed: its approver says it says what the clauses say (FEO-038).
-                    let checked = s(doc, "document").is_some();
-                    if checked && params.get("pdf_matches").and_then(Value::as_bool) != Some(true) {
-                        return Err(Error::field("pdf_matches", "read the PDF against the clauses, and say it says what they say"));
-                    }
-                    json!({"status": "Approved", "approved_by": hc.ctx.email, "decision_note": note("note"),
-                           "approved_digest": approved_digest(hc.tx, hc.ctx, doc).await?, "pdf_checked_by": if checked { json!(hc.ctx.email) } else { Value::Null }})
-                } else {
-                    json!({"status": "Draft", "decision_note": note("note").ok_or_else(|| Error::field("note", "sending it back says why"))?})
-                }
-            }
+            // The approval policy is satisfied, or asked nobody: the contract approved, bound to what it was given.
+            "approve" => json!({"status": "Approved", "approved_digest": approved_digest(hc.tx, hc.ctx, doc).await?, "decision_note": null}),
             "send_for_signature" => {
                 // What goes for signature is what was approved, wording and PDF (FEO-038); one approved before
                 // approvals were bound has nothing to compare.
