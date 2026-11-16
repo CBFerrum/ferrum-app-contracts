@@ -10,7 +10,6 @@
 //! contracts read by three people as their roles say; and who may do what.
 
 use chrono::{Duration, Utc};
-use ferrum_kernel::secret::SecretKey;
 use ferrum_kernel::tenant::NewTenant;
 use ferrum_kernel::{Ctx, Db, DbConfig, Doc, Error, HookRegistry, Kernel, KernelSettings};
 use ferrum_meta::Catalog;
@@ -195,7 +194,7 @@ async fn scenario() {
     hooks.app("sign", &sign_packages, ferrum_app_sign::register);
     hooks.own("sign", &sign_packages);
     ferrum_app_contracts::register(&mut hooks);
-    let settings = KernelSettings { secret_key: Some(SecretKey::new([7u8; 32])), pdf_url: Some(fake_pdf_renderer().await), ..Default::default() };
+    let settings = KernelSettings { pdf_url: Some(fake_pdf_renderer().await), ..Default::default() };
     let k = Kernel::boot(db, catalog, hooks, settings, None).await.expect("boot");
     k.set_file_store(Arc::new(MemFiles::default()));
     ferrum_domain::maintenance(&k).await.expect("partitions");
