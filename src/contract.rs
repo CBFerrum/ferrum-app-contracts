@@ -350,6 +350,11 @@ impl DocHook for ContractHook {
                 Value::Object(values)
             }
             "approval_granted" => {
+                // Run by the approval policy's transition, as the system: a person running it would approve the
+                // contract without the policy.
+                if !hc.ctx.is_system {
+                    return Err(Error::Forbidden("the approval policy approves a contract: decide it under Approvals".into()));
+                }
                 // The approval policy is satisfied (or asked nobody): bound to what it was given.
                 if s(doc, "status") != Some("In Review") {
                     return Ok(Some(json!({"status": s(doc, "status")})));

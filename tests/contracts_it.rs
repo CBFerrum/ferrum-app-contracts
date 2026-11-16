@@ -260,6 +260,9 @@ async fn scenario() {
     let asked = t.act(&both, big, "submit_contract", Value::Null).await.unwrap();
     assert!(asked["approval"]["steps"][0]["label"].as_str().is_some(), "asked: {asked}");
     assert_eq!(t.status(big).await, "In Review");
+    // The policy is the only way to Approved: whoever may change the contract cannot approve it by its hidden action.
+    assert!(t.act(&both, big, "approval_granted", Value::Null).await.is_err(), "the approval is the policy's");
+    assert_eq!(t.status(big).await, "In Review");
     refused(t.act(&ca, big, "approve_contract", Value::Null).await, "invalid", "decide it under Approvals");
     refused(t.k.decide_approval(&both, "Contract", big, true, None).await, "forbidden", "");
     t.k.decide_approval(&ca, "Contract", big, false, Some("Cap the liability")).await.expect("sent back");
