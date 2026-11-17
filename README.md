@@ -45,7 +45,7 @@ governs.
 
 | | |
 |---|---|
-| **Version** | 0.3.1 (platform `>=0.3.2, <0.4`) |
+| **Version** | 0.4.2 (platform `>=0.3.2, <0.4`) |
 | **Kind** | Own interface at `/contracts/`, plus Ferrum's generic records screens for every entity |
 | **What it adds** | 5 main entities and 5 child tables, 3 roles, 1 approval policy, 4 reports, 2 document templates (print formats), 3 message templates, 1 menu module, 2 seeded contract types |
 | **Depends on** | Ferrum core and **Sign** (installing Contracts installs Sign) |
@@ -177,7 +177,7 @@ governs.
 - **Signatories.** A table of name, email, role (such as Counterparty, Organisation, Witness) and order, at most
   twelve.
 - **Signature boxes.** Each signatory's box is on the last page, the signature page the packaged templates end
-  with. A contract with no type and no signatories keeps the two boxes it always had.
+  with. A contract with no type and no signatories keeps two boxes at fixed places.
 - **Follows Sign.** At the next upkeep, a completed request makes the contract Signed with the sealed PDF; a
   request that is declined, expired or voided returns the contract to Approved and says why.
 - **A page is refused up front.** Where there is no PDF service, a body is kept as a page. Send for Signature
@@ -403,11 +403,10 @@ Compared with five contract lifecycle management products: Ironclad, DocuSign CL
 
 ### ✅ Recently shipped
 
-- [x] **0.4.2.** Rebuilt on Ferrum-Frontend 06bd1a2, and no routes to the screens apps no longer have.
+- [x] **0.4.2.** Rebuilt on Ferrum-Frontend 06bd1a2.
 - [x] **0.4.1.** Whoever submitted a contract cannot approve it, however its approval is asked: only they ask it
   again (Submitted By).
-- [x] **0.4.0.** The approval is the platform's policy on Approve It alone: the workflow that carried it, the single
-  approver beside it, Approved By and PDF Checked By are gone.
+- [x] **0.4.0.** The approval is the platform's policy on Approve It alone; who decided, when and what they said is the approval request's record.
 - [x] **0.3.1.** Send for Signature refuses a page up front and names the missing PDF service.
 - [x] **0.3.0.** Contract types and generated bodies kept by version, clauses with merge fields and fallbacks,
   parties and governed records as links, approval by policy, signatories in order, signed-elsewhere copies,
