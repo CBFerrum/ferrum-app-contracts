@@ -19,7 +19,7 @@ mod reports;
 mod sign;
 mod term;
 
-use chrono::{NaiveDate, Utc};
+use chrono::NaiveDate;
 use ferrum_domain::reports::ReportSource;
 use ferrum_kernel::{Ctx, Doc, Error, HookRegistry, Kernel, Result};
 use serde_json::Value;
@@ -50,13 +50,18 @@ pub fn reports() -> Vec<Arc<dyn ReportSource>> {
     vec![Arc::new(reports::ContractReports)]
 }
 
-/// Upkeep: approvals and signatures followed, terms moved on, obligations overdue, reminders sent.
+/// Upkeep: approvals and signatures followed, terms moved on, obligations overdue, reminders sent, each workspace
+/// on its own day.
 pub async fn maintenance(k: &Kernel) -> Result<()> {
-    maintenance_on(k, Utc::now().date_naive()).await
+    upkeep(k, None).await
 }
 
-/// [`maintenance`] as of `today`.
+/// [`maintenance`] as if every workspace's day were `today`.
 pub async fn maintenance_on(k: &Kernel, today: NaiveDate) -> Result<()> {
+    upkeep(k, Some(today)).await
+}
+
+async fn upkeep(k: &Kernel, on: Option<NaiveDate>) -> Result<()> {
     let mut tx = k.db.system_tx().await?;
     let tenants: Vec<Uuid> = sqlx::query_scalar("select id from tenant where status = 'active' order by id").fetch_all(&mut *tx).await?;
     tx.commit().await?;
@@ -71,7 +76,7 @@ pub async fn maintenance_on(k: &Kernel, today: NaiveDate) -> Result<()> {
             let mut tx = k.db.tenant_tx(tenant).await?;
             contract::follow_approvals(k, &ctx, &mut tx).await?;
             sign::follow(k, &ctx, &mut tx).await?;
-            term::upkeep(k, &ctx, &mut tx, today).await?;
+            term::upkeep(k, &ctx, &mut tx, on.unwrap_or_else(|| ctx.today())).await?;
             tx.commit().await?;
             Ok::<(), Error>(())
         };

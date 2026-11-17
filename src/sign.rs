@@ -116,10 +116,12 @@ pub(crate) async fn follow(k: &Kernel, ctx: &Ctx, tx: &mut Tx) -> Result<()> {
             .fetch_all(&mut **tx)
             .await?;
     for (contract, request) in out {
-        let row: Option<(Option<String>, Option<String>, Option<chrono::DateTime<chrono::Utc>>)> =
-            sqlx::query_as("select status, sealed_document, completed_at from e_sign_request where tenant_id = $1 and id = $2")
+        // Signed on the workspace's day of the moment Sign completed, not the UTC day.
+        let row: Option<(Option<String>, Option<String>, Option<chrono::NaiveDate>)> =
+            sqlx::query_as("select status, sealed_document, (completed_at at time zone $3)::date from e_sign_request where tenant_id = $1 and id = $2")
                 .bind(ctx.tenant)
                 .bind(request)
+                .bind(&ctx.schema.timezone)
                 .fetch_optional(&mut **tx)
                 .await?;
         let Some((status, sealed, completed)) = row else { continue };
@@ -131,7 +133,7 @@ pub(crate) async fn follow(k: &Kernel, ctx: &Ctx, tx: &mut Tx) -> Result<()> {
                     Some(file) => k.copy_file(ctx, file, Some(("Contract", contract))).await?.get("url").and_then(Value::as_str).map(str::to_string),
                     None => sealed,
                 };
-                json!({"status": "Signed", "signed_document": signed, "signed_on": completed.map(|c| c.date_naive().to_string())})
+                json!({"status": "Signed", "signed_document": signed, "signed_on": completed.map(|c| c.to_string())})
             }
             Some(st @ ("Declined" | "Expired" | "Voided")) => {
                 json!({"status": "Approved", "decision_note": format!("The signature request was {}: send it again", st.to_lowercase())})

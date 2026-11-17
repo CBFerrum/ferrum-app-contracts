@@ -11,7 +11,7 @@
 
 use crate::obj;
 use async_trait::async_trait;
-use chrono::{Months, NaiveDate, Utc};
+use chrono::{Months, NaiveDate};
 use ferrum_domain::util::{elevated, id, rows, s};
 use ferrum_kernel::messages::{Message, Recipient};
 use ferrum_kernel::{Ctx, Doc, DocHook, Error, HookCtx, Kernel, Result, Tx};
@@ -205,10 +205,10 @@ impl DocHook for ObligationHook {
         &["done_on", "overdue"]
     }
 
-    async fn before_validate(&self, _hc: &mut HookCtx<'_>, doc: &mut Doc) -> Result<()> {
+    async fn before_validate(&self, hc: &mut HookCtx<'_>, doc: &mut Doc) -> Result<()> {
         if s(doc, "status") == Some("Done") {
             if doc.get("done_on").is_none_or(Value::is_null) {
-                doc.insert("done_on".into(), json!(Utc::now().date_naive().to_string()));
+                doc.insert("done_on".into(), json!(hc.ctx.today().to_string()));
             }
             doc.insert("overdue".into(), json!(false));
         } else {

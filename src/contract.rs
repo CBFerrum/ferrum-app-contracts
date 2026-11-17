@@ -333,7 +333,7 @@ impl DocHook for ContractHook {
             "renew_contract" => return crate::term::renew(hc, doc).await.map(Some),
             "terminate_contract" => {
                 let why = note("reason").ok_or_else(|| Error::field("reason", "a termination says why"))?;
-                json!({"status": "Terminated", "terminated_on": Utc::now().date_naive().to_string(), "termination_reason": why, "notice_due": false})
+                json!({"status": "Terminated", "terminated_on": hc.ctx.today().to_string(), "termination_reason": why, "notice_due": false})
             }
             _ => return Ok(None),
         };
