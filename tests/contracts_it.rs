@@ -658,4 +658,41 @@ async fn scenario() {
     // ───────────── who may do what ─────────────
     refused(t.k.insert(&ca, "Contract", obj(contract("Mine", "1", start.clone(), end.clone(), vec![]))).await, "forbidden", "");
     refused(t.k.insert(&ca, "Obligation", obj(ob("Mine", today.to_string()))).await, "forbidden", "");
+
+    // ───────────── the workspace's day, not UTC's ─────────────
+    // No clock can be set: as the platform's own suites do, the workspace moves to a zone whose day is not UTC's now
+    // (UTC-11 before 10:00 UTC, UTC+14 after), and what the app dates or decides "today" is held to the workspace's day.
+    use chrono::Timelike;
+    let zone = if Utc::now().hour() < 10 { "Pacific/Pago_Pago" } else { "Pacific/Kiritimati" };
+    t.k.update_tenant_settings(&t.admin, &obj(json!({"timezone": zone}))).await.expect("the workspace's zone");
+    let cm = t.k.load_ctx(tenant, cm.user, None, "it".into()).await.expect("ctx");
+    let day = cm.today();
+    assert_ne!(day, Utc::now().date_naive(), "{zone}'s day is not UTC's");
+    t.act(&cm, wet, "terminate_contract", json!({"reason": "Moved in house"})).await.unwrap();
+    assert_eq!(t.get("Contract", wet).await["terminated_on"], json!(day.to_string()), "terminated on the workspace's day");
+    let late = uid(&t
+        .insert(
+            &cm,
+            "Contract",
+            json!({"title": "Signed late", "counterparty_name": "Globex", "counterparty_email": "legal@globex.test", "document": path,
+                   "starts_on": day.to_string(), "ends_on": (day + Duration::days(365)).to_string()}),
+        )
+        .await["id"]);
+    t.act(&cm, late, "submit_contract", Value::Null).await.unwrap();
+    t.act(&cm, late, "send_for_signature", Value::Null).await.unwrap();
+    t.sign_ends(uid(&t.get("Contract", late).await["sign_request"]), "Completed").await;
+    ferrum_app_contracts::maintenance(&k).await.unwrap();
+    assert_eq!(t.get("Contract", late).await["signed_on"], json!(day.to_string()), "signed on the workspace's day of Sign's moment");
+    let finished = uid(&t.insert(&cm, "Obligation", ob("Kick-off held", day.to_string())).await["id"]);
+    t.set(&cm, "Obligation", finished, json!({"status": "Done"})).await.unwrap();
+    assert_eq!(t.get("Obligation", finished).await["done_on"], json!(day.to_string()), "done on the workspace's day");
+    // Upkeep's day is each workspace's own: due yesterday there is overdue, due today there is not.
+    let yesterday = uid(&t.insert(&cm, "Obligation", ob("Due yesterday", (day - Duration::days(1)).to_string())).await["id"]);
+    let due_today = uid(&t.insert(&cm, "Obligation", ob("Due today", day.to_string())).await["id"]);
+    ferrum_app_contracts::maintenance(&k).await.unwrap();
+    assert_eq!(
+        (t.get("Obligation", yesterday).await["overdue"].as_bool(), t.get("Obligation", due_today).await["overdue"].as_bool()),
+        (Some(true), Some(false)),
+        "overdue as of the workspace's day"
+    );
 }
