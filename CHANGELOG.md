@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.3
+
+Server only. Needs the same platform as 0.4.2. No interface or database change.
+
+- **What happens today is dated on the workspace's day.** A contract terminated, an obligation done and a contract
+  signed through Sign were dated on the UTC day, and the upkeep moved every workspace's contracts and obligations on
+  the UTC day (started, renewed, expired, notice due, overdue, reminded). A workspace east of UTC dated the first hours
+  of its day on the day before, one west of UTC its evenings on the next day. Each is on the workspace's own day now.
+
 ## 0.4.2
 
 Needs the same platform as 0.4.1. No database change. Interface only, `ui/dist` rebuilt with Ferrum-Frontend `06bd1a2`.

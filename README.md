@@ -7,7 +7,7 @@
 
 <br>
 
-[![Version](https://img.shields.io/badge/version-0.4.2-334155?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-0.4.3-334155?style=flat-square)](CHANGELOG.md)
 [![Licence: AGPL-3.0](https://img.shields.io/badge/licence-AGPL--3.0-blue?style=flat-square)](LICENSE)
 [![Ferrum platform](https://img.shields.io/badge/runs%20on-Ferrum-2f5bea?style=flat-square)](https://github.com/CBFerrum/Ferrum)
 ![Rust](https://img.shields.io/badge/Rust-server-b7410e?style=flat-square&logo=rust)
@@ -45,7 +45,7 @@ governs.
 
 | | |
 |---|---|
-| **Version** | 0.4.2 (platform `>=0.3.2, <0.4`) |
+| **Version** | 0.4.3 (platform `>=0.3.2, <0.4`) |
 | **Kind** | Own interface at `/contracts/`, plus Ferrum's generic records screens for every entity |
 | **What it adds** | 5 main entities and 5 child tables, 3 roles, 1 approval policy, 4 reports, 2 document templates (print formats), 3 message templates, 1 menu module, 2 seeded contract types |
 | **Depends on** | Ferrum core and **Sign** (installing Contracts installs Sign) |
@@ -403,6 +403,7 @@ Compared with five contract lifecycle management products: Ironclad, DocuSign CL
 
 ### ✅ Recently shipped
 
+- [x] **0.4.3.** What happens today is dated on the workspace's day, not the UTC day.
 - [x] **0.4.2.** Rebuilt on Ferrum-Frontend 06bd1a2.
 - [x] **0.4.1.** Whoever submitted a contract cannot approve it, however its approval is asked: only they ask it
   again (Submitted By).
