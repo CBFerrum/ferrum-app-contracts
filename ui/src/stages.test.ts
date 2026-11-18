@@ -9,9 +9,11 @@ describe("contracts by stage", () => {
       { id: "c", status: "Active" },
       { id: "d", status: "Approved" },
       { id: "e", status: "Expired" },
+      { id: "f", status: "Signed", amends: "c" },
+      { id: "g", status: "Draft", amends: "c" },
     ]);
     expect(s.map(([stage, l]) => [stage, l.map((c) => c.id)])).toEqual([
-      ["In the works", ["a", "d"]],
+      ["In the works", ["a", "d", "g"]],
       ["Out for signature", ["b"]],
       ["Active", ["c"]],
     ]);

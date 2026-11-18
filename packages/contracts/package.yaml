@@ -1,5 +1,5 @@
 package: contracts
-version: 0.6.0
+version: 0.10.0
 label: Contracts
 description: "Contracts from contract types and approved clauses, their body generated and kept by version, approval by policy, signature through Sign, activation, renewal, notice, obligations and reminders"
 depends: [core, sign]
@@ -26,7 +26,7 @@ roles:
       - {entity: ContractType, read: true, write: true, create: true}
       - {entity: Contract, read: true, write: true, create: true, export: true, import: true, where: {confidential: false}}
       - {entity: Contract, read: true, write: true, create: true, if_owner: true}
-      - {entity: Obligation, read: true, write: true, create: true, export: true}
+      - {entity: Obligation, read: true, write: true, create: true, export: true, import: true}
       - {entity: SignRequest, read: true}
   - name: Contract Approver
     description: Approves or sends back contracts as the approval policy asks, and approves clauses. Reads a confidential contract only when they own it, are among its readers, or are asked to approve it.
@@ -42,7 +42,7 @@ roles:
       - {entity: Contract, read: true, write: true, create: true, export: true, import: true}
       - {entity: Clause, read: true}
       - {entity: ContractType, read: true}
-      - {entity: Obligation, read: true, write: true, create: true, export: true}
+      - {entity: Obligation, read: true, write: true, create: true, export: true, import: true}
 
 # Approval by policy (docs/api.md, "Approvals"): Submit It runs the hidden action Approve It as whoever submitted,
 # which asks Legal first when the contract departs from its type's playbook (deviation_score above zero), then a
@@ -59,6 +59,33 @@ approvals:
       lock: true
 
 messages:
+  - key: contracts.request_received
+    label: Contract requested
+    entity: Contract
+    category: operational
+    channels: [email, inapp]
+    languages:
+      en:
+        email: {subject: "Contract requested: {{ doc.title }}", body: "<p>{{ doc.requested_by }} asks for a contract with {{ doc.counterparty_name }}: {{ doc.title }}.</p><p>{{ doc.request_note }}</p><p>Take it to own it, or withdraw it saying why.</p>"}
+        inapp: {title: "Contract requested: {{ doc.title }}", text: "{{ doc.requested_by }}"}
+  - key: contracts.request_taken
+    label: Contract request taken up
+    entity: Contract
+    category: operational
+    channels: [email, inapp]
+    languages:
+      en:
+        email: {subject: "Your contract request was taken up: {{ doc.title }}", body: "<p>{{ doc.owner }} drafts {{ doc.title }} with {{ doc.counterparty_name }} and will be in touch.</p>"}
+        inapp: {title: "Your contract request was taken up: {{ doc.title }}", text: "{{ doc.owner }}"}
+  - key: contracts.request_withdrawn
+    label: Contract request withdrawn
+    entity: Contract
+    category: operational
+    channels: [email, inapp]
+    languages:
+      en:
+        email: {subject: "Your contract request was withdrawn: {{ doc.title }}", body: "<p>{{ doc.title }} with {{ doc.counterparty_name }} was withdrawn: {{ doc.withdrawal_reason }}</p>"}
+        inapp: {title: "Your contract request was withdrawn: {{ doc.title }}", text: "{{ doc.withdrawal_reason }}"}
   - key: contracts.obligation_due
     label: Obligation due
     entity: Obligation
@@ -172,8 +199,14 @@ backfills:
 # Contracts made before the deviation score score nothing.
   - {name: contract_deviation_zero, entity: Contract, needs: "t.deviation_score is null", set: "deviation_score = 0"}
 
+# A leaver's open obligations pass on to whoever takes over their work.
+handover:
+  - {entity: Obligation, field: owner, where: {status: [Open]}}
+
 personal_data:
   - {entity: Contract, match: counterparty_email, name: counterparty_name, retain: "Contracts, and the drafts that led to them, kept as contract law and audit require"}
   - {entity: Contract, match: signatories.email, retain: "Who signs a contract is part of it, kept as contract law and audit require"}
   - {entity: Contract, match: readers.email, erase: [readers]}
+  - {entity: Contract, match: requested_by, erase: [requested_by, request_note]}
+  - {entity: Obligation, match: owner, retain: "Who answered for a contract's obligation is part of its record"}
   - {entity: Clause, match: versions.changed_by, retain: "Who changed approved wording is the clause library's record"}

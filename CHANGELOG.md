@@ -1,5 +1,63 @@
 # Changelog
 
+## 0.12.0
+
+Needs the same platform as 0.11.0. The `contracts` package is 0.10.0: Contract gains Signed Copy (Uploaded), Signed By
+and Signed On (Recorded); Contract Manager and Legal may import obligations. `ui/dist` rebuilt with Ferrum-Frontend
+`5e2661f`.
+
+- **Created signed.** A create with the three fields, by a Contract Approver, Legal or an administrator, makes the
+  contract Signed: its copy (the creator's own loose upload) is attached to it in the same transaction, marked signed
+  elsewhere with who and when. A refused create keeps no file on any contract; one file goes on one contract; the
+  three fields cannot be set later or by the system (a form). The platform's import does the rest, row by row.
+- **Signed copies** (`/contracts/signed-copies`): upload many signed PDFs and download a sheet, one row per file, to
+  complete and import.
+- Record Signed Copy has its contract.
+
+## 0.11.0
+
+Needs the same platform as 0.10.0. Packages: `contracts` 0.9.0 (Contract gains Amends, Amendment No, Applied On,
+Amendments and Master, an index on Amends, the action Amend It); `contracts_selling` 0.2.0 and `contracts_buying`
+0.2.0 (Sales Order and Purchase Order gain the contract they are made under). `ui/dist` rebuilt with
+Ferrum-Frontend `5e2661f`.
+
+- **Amend It** (`amend_contract`) makes a draft amendment from a signed or active contract's terms, one at a time.
+  Approved and signed like any contract, it is applied by the upkeep on its start day, once: the contract takes its
+  value, end, renewal and notice and counts the amendment. An amendment never becomes Active, never renews,
+  expires or reminds; Renew It and Terminate It are not offered on it; reports count its contract once.
+- **Master agreements.** A contract may name its master (another contract, not an amendment); orders name the
+  contract or master they are made under.
+- Renew It's new contract keeps each clause's own wording.
+
+## 0.10.0
+
+Needs the same platform as 0.9.0. The `contracts` package is 0.8.0: Obligation gains Repeats Every (Months), Repeat
+Until, Evidence Required, Evidence, Evidence Note, Previous and two hidden counters, with a unique key on Previous;
+existing obligations repeat nothing and need no evidence. `ui/dist` rebuilt with Ferrum-Frontend `5e2661f`.
+
+- **Obligations that repeat.** Done, or past its day, a repeating obligation makes the next one, counted from the
+  first due date, until its last day or the contract's end; never for a withdrawn, terminated or expired contract.
+  At most one follows each, however many saves and upkeeps run (a unique key on Previous, under the row lock).
+- **Evidence before Done**, when the obligation requires it.
+- Obligation owners are declared personal data (kept with the record) and handed over when someone leaves.
+- The home page marks repeating obligations.
+
+## 0.9.0
+
+Needs the same platform as 0.8.0. The `contracts` package is 0.7.0: Contract gains Requested By, Request Note,
+Withdrawn On, Withdrawal Reason and the status Withdrawn (appended; existing values keep their meaning); three
+message templates. `ui/dist` rebuilt with Ferrum-Frontend `5e2661f`.
+
+- **Requests from a form.** A form in the Forms app mapped to Contract makes a draft as the system. Such a draft no
+  longer gets the system's address as its owner: it says who asked and waits. Legal and the Contract Managers are
+  told as it arrives (`contracts.request_received`; Legal only for a confidential one) and see it under Requests on
+  the Contracts page, apart from the drafts in the works.
+- **Take It** (`take_request`): the presser owns it; the requester is told (`contracts.request_taken`).
+- **Withdraw It** (`withdraw_contract`): a Draft or Approved contract ends as Withdrawn with the reason and the day;
+  the requester is told (`contracts.request_withdrawn`). Nothing leads out of Withdrawn and the upkeep leaves it.
+- Requested By and Request Note are erased with the requester's personal data.
+- The interface's route table is in `ui/src/routes.tsx`, and a test mounts it.
+
 ## 0.8.0
 
 Needs the same platform as 0.7.0. The `contracts` package is 0.6.0: Clause gains `wording_version` and a Versions

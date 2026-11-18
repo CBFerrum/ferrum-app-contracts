@@ -9,7 +9,7 @@
 //! version or a new contract; terminated saying why; obligations overdue and done; reports; confidential
 //! contracts read by three people as their roles say; and who may do what.
 
-use chrono::{Duration, Utc};
+use chrono::{Datelike, Duration, Utc};
 use ferrum_kernel::tenant::NewTenant;
 use ferrum_kernel::{Ctx, Db, DbConfig, Doc, Error, HookRegistry, Kernel, KernelSettings};
 use ferrum_meta::Catalog;
@@ -1077,4 +1077,416 @@ async fn scenario() {
     let after = t.get("Contract", unused).await;
     assert!(after["status"] == "Approved" && after["sign_request"].is_null(), "it stays approved, no request");
     assert_eq!(requests(unused).await, 0, "nothing left of the refused call");
+
+    // ───────────── requests from a form: the queue, Take It, Withdraw It (CTR-05) ─────────────
+    // A form's response arrives as the system makes it: a draft with who asked and no owner.
+    let system = Ctx::system(tenant, k.registry.schema(tenant).await.unwrap());
+    let asked = |title: &str, confidential: bool| {
+        json!({"title": title, "counterparty_name": "Initech", "starts_on": day.to_string(), "ends_on": (day + Duration::days(365)).to_string(),
+               "requested_by": "asker@outside.test", "request_note": "We need an NDA before the demo", "confidential": confidential})
+    };
+    let sent = |record: Uuid, template: &'static str| {
+        let k = k.clone();
+        async move {
+            let mut tx = k.db.tenant_tx(tenant).await.unwrap();
+            let n: i64 = sqlx::query_scalar("select count(*) from message_send where tenant_id = $1 and record_id = $2 and template = $3")
+                .bind(tenant)
+                .bind(record)
+                .bind(template)
+                .fetch_one(&mut *tx)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+            n
+        }
+    };
+    let request = t.insert(&system, "Contract", asked("NDA for the demo", false)).await;
+    assert!(request["owner"].is_null(), "a request arrives without an owner: {request:?}");
+    let request = uid(&request["id"]);
+    // Legal and the Contract Managers are told, each once: cm, lead, cm-other, cm2, lawyer, counsel.
+    assert_eq!(sent(request, "contracts.request_received").await, 6, "Legal and the Contract Managers are told");
+    // One person takes it.
+    let lead = k.load_ctx(tenant, both.user, None, "it".into()).await.unwrap();
+    let taken = t.act(&cm, request, "take_request", Value::Null).await.expect("taken");
+    assert_eq!(taken["owner"], "cm@northwind.test");
+    refused(t.act(&lead, request, "take_request", Value::Null).await, "invalid", "is not available");
+    assert_eq!(t.get("Contract", request).await["owner"], "cm@northwind.test");
+    assert_eq!(sent(request, "contracts.request_taken").await, 1, "whoever asked is told, once");
+    // A contract a person drafts is not a request.
+    let drafted = uid(&t
+        .insert(
+            &cm,
+            "Contract",
+            json!({"title": "Drafted here", "counterparty_name": "Initech", "starts_on": day.to_string(),
+                                                         "ends_on": (day + Duration::days(365)).to_string()}),
+        )
+        .await["id"]);
+    assert_eq!(sent(drafted, "contracts.request_received").await, 0);
+    refused(t.act(&cm, drafted, "take_request", Value::Null).await, "invalid", "is not available");
+    // A draft is withdrawn saying why; nothing leads out of Withdrawn.
+    let unwanted = uid(&t.insert(&system, "Contract", asked("Not needed after all", false)).await["id"]);
+    refused(t.act(&cm, unwanted, "withdraw_contract", Value::Null).await, "invalid", "says why");
+    t.act(&cm, unwanted, "withdraw_contract", json!({"reason": "The demo was cancelled"})).await.expect("withdrawn");
+    let gone = t.get("Contract", unwanted).await;
+    assert_eq!(
+        (gone["status"].as_str(), gone["withdrawn_on"].as_str(), gone["withdrawal_reason"].as_str()),
+        (Some("Withdrawn"), Some(day.to_string().as_str()), Some("The demo was cancelled"))
+    );
+    assert_eq!(sent(unwanted, "contracts.request_withdrawn").await, 1, "whoever asked is told");
+    for action in ["submit_contract", "send_for_signature", "take_request", "withdraw_approval"] {
+        refused(t.act(&cm, unwanted, action, json!({"reason": "again"})).await, "invalid", "is not available");
+    }
+    // An approved contract can be withdrawn; one in review cannot.
+    t.act(&cm, drafted, "submit_contract", Value::Null).await.unwrap();
+    t.act(&cm, drafted, "withdraw_contract", json!({"reason": "Signed on paper by the other side's form"})).await.expect("an approved one");
+    assert_eq!(t.status(drafted).await, "Withdrawn");
+    let reviewed = uid(&t
+        .insert(
+            &cm,
+            "Contract",
+            json!({"title": "In review", "counterparty_name": "Initech", "value": "250000", "starts_on": day.to_string(),
+                                                         "ends_on": (day + Duration::days(365)).to_string()}),
+        )
+        .await["id"]);
+    t.act(&cm, reviewed, "submit_contract", Value::Null).await.unwrap();
+    assert_eq!(t.status(reviewed).await, "In Review");
+    refused(t.act(&cm, reviewed, "withdraw_contract", json!({"reason": "No"})).await, "invalid", "is not available");
+    // Who may take and withdraw: nobody without a Contracts role; a Contract Manager not a confidential request they cannot read.
+    let other = t.insert(&system, "Contract", asked("Another request", false)).await;
+    let other = uid(&other["id"]);
+    let nobody = k.load_ctx(tenant, nobody.user, None, "it".into()).await.unwrap();
+    for action in ["take_request", "withdraw_contract"] {
+        let r = t.act(&nobody, other, action, json!({"reason": "Mine"})).await;
+        assert!(matches!(r, Err(Error::Forbidden(_) | Error::NotFound(_))), "{action}: {r:?}");
+    }
+    let secret = uid(&t.insert(&system, "Contract", asked("A confidential request", true)).await["id"]);
+    refused(t.act(&cm, secret, "take_request", Value::Null).await, "not found", "");
+    // The upkeep leaves a withdrawn contract alone, a year on.
+    ferrum_app_contracts::maintenance_on(&k, tenant, day + Duration::days(366)).await.unwrap();
+    assert_eq!(t.status(unwanted).await, "Withdrawn");
+    assert_eq!(sent(unwanted, "contracts.ending").await + sent(unwanted, "contracts.renewal_notice").await, 0, "no reminder");
+    // An erasure blanks who asked, and the contract remains.
+    t.k.erase_personal_data(&t.admin, "asker@outside.test", "asked").await.expect("erased");
+    let blank = t.get("Contract", request).await;
+    assert!(blank["requested_by"].is_null() && blank["request_note"].is_null() && blank["title"] == "NDA for the demo", "{blank:?}");
+
+    // ───────────── obligations that repeat, and evidence before Done (CTR-07) ─────────────
+    let ends = day + Duration::days(365);
+    let duties = uid(&t
+        .insert(&cm, "Contract", json!({"title": "Managed duties", "counterparty_name": "Globex", "starts_on": day.to_string(), "ends_on": ends.to_string()}))
+        .await["id"]);
+    let duty = |what: &str, due: chrono::NaiveDate, extra: Value| {
+        let mut v = json!({"contract": duties.to_string(), "description": what, "owner": "ops@northwind.test", "due_on": due.to_string()});
+        v.as_object_mut().unwrap().extend(extra.as_object().cloned().unwrap_or_default());
+        v
+    };
+    let after = |o: Uuid| {
+        let k = k.clone();
+        async move {
+            let mut tx = k.db.tenant_tx(tenant).await.unwrap();
+            let rows: Vec<(Uuid, chrono::NaiveDate)> = sqlx::query_as("select id, due_on from e_obligation where tenant_id = $1 and previous = $2")
+                .bind(tenant)
+                .bind(o)
+                .fetch_all(&mut *tx)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+            rows
+        }
+    };
+    let months = |d: chrono::NaiveDate, n: u32| d.checked_add_months(chrono::Months::new(n)).unwrap();
+    // Obligations without a predecessor are not each other's duplicates.
+    t.insert(&cm, "Obligation", duty("Kick-off", day + Duration::days(3), json!({}))).await;
+    t.insert(&cm, "Obligation", duty("Handover", day + Duration::days(4), json!({}))).await;
+    // Evidence first.
+    let audited = uid(&t.insert(&cm, "Obligation", duty("Annual audit", day + Duration::days(30), json!({"evidence_required": true}))).await["id"]);
+    let r = t.set(&cm, "Obligation", audited, json!({"status": "Done"})).await;
+    assert!(matches!(&r, Err(Error::Validation(v)) if v.iter().any(|f| f.field == "evidence")), "done only with its evidence: {r:?}");
+    let minutes = k.store_file(&cm, Some(("Obligation", audited)), "audit.pdf", "application/pdf", &pdf("Audit", 1)).await.unwrap();
+    t.set(&cm, "Obligation", audited, json!({"status": "Done", "evidence": minutes["url"]})).await.expect("done with its evidence");
+    // Done, a repeating obligation makes the next, once, even when reopened and done again.
+    let first_due = day + Duration::days(10);
+    let review = uid(&t.insert(&cm, "Obligation", duty("Quarterly service review", first_due, json!({"repeat_months": 3}))).await["id"]);
+    t.set(&cm, "Obligation", review, json!({"status": "Done"})).await.unwrap();
+    let next = after(review).await;
+    assert_eq!(next.iter().map(|r| r.1).collect::<Vec<_>>(), [months(first_due, 3)], "done, it makes the next three months on");
+    let made = t.get("Obligation", next[0].0).await;
+    assert_eq!(
+        (made["status"].as_str(), made["owner"].as_str(), made["description"].as_str(), made["previous"].as_str()),
+        (Some("Open"), Some("ops@northwind.test"), Some("Quarterly service review"), Some(review.to_string().as_str()))
+    );
+    t.set(&cm, "Obligation", review, json!({"status": "Open"})).await.unwrap();
+    t.set(&cm, "Obligation", review, json!({"status": "Done"})).await.unwrap();
+    assert_eq!(after(review).await.len(), 1, "reopened and done again, it makes no second one");
+    // The day of the month is kept: from the 31st, the end of a shorter month, then the 31st again.
+    let jan31 = chrono::NaiveDate::from_ymd_opt(day.year() + 1, 1, 31).unwrap();
+    let monthly = uid(&t.insert(&cm, "Obligation", duty("Monthly report", jan31, json!({"repeat_months": 1}))).await["id"]);
+    t.set(&cm, "Obligation", monthly, json!({"status": "Done"})).await.unwrap();
+    let feb = after(monthly).await;
+    assert_eq!(feb[0].1, months(jan31, 1), "the end of February");
+    t.set(&cm, "Obligation", feb[0].0, json!({"status": "Done"})).await.unwrap();
+    assert_eq!(after(feb[0].0).await[0].1, chrono::NaiveDate::from_ymd_opt(day.year() + 1, 3, 31).unwrap(), "the 31st again");
+    // It stops at its last day, and at the contract's end.
+    let until = uid(&t
+        .insert(
+            &cm,
+            "Obligation",
+            duty("Until the launch", day + Duration::days(1), json!({"repeat_months": 1, "repeat_until": (day + Duration::days(20)).to_string()})),
+        )
+        .await["id"]);
+    t.set(&cm, "Obligation", until, json!({"status": "Done"})).await.unwrap();
+    assert!(after(until).await.is_empty(), "past its last day");
+    let last = uid(&t.insert(&cm, "Obligation", duty("Last month", ends - Duration::days(10), json!({"repeat_months": 1}))).await["id"]);
+    t.set(&cm, "Obligation", last, json!({"status": "Done"})).await.unwrap();
+    assert!(after(last).await.is_empty(), "past the contract's end");
+    refused(
+        t.k.insert(&cm, "Obligation", obj(duty("Backwards", day + Duration::days(9), json!({"repeat_months": 1, "repeat_until": day.to_string()})))).await,
+        "invalid",
+        "on or after the day it is due",
+    );
+    // An ended contract makes no more.
+    let ending = uid(&t
+        .insert(&cm, "Contract", json!({"title": "Ending soon", "counterparty_name": "Globex", "starts_on": day.to_string(), "ends_on": ends.to_string()}))
+        .await["id"]);
+    let orphan = uid(&t
+        .insert(
+            &cm,
+            "Obligation",
+            json!({"contract": ending.to_string(), "description": "Monthly call", "owner": "ops@northwind.test",
+                                          "due_on": (day + Duration::days(5)).to_string(), "repeat_months": 1}),
+        )
+        .await["id"]);
+    t.act(&cm, ending, "withdraw_contract", json!({"reason": "Never went ahead"})).await.unwrap();
+    t.set(&cm, "Obligation", orphan, json!({"status": "Done"})).await.unwrap();
+    assert!(after(orphan).await.is_empty(), "an ended contract makes no more");
+    // A missed one still brings the next, and two upkeeps at once make one.
+    let missed = uid(&t.insert(&cm, "Obligation", duty("Monthly check", day + Duration::days(2), json!({"repeat_months": 1}))).await["id"]);
+    let (a, b) = tokio::join!(
+        ferrum_app_contracts::maintenance_on(&k, tenant, day + Duration::days(3)),
+        ferrum_app_contracts::maintenance_on(&k, tenant, day + Duration::days(3))
+    );
+    a.unwrap();
+    b.unwrap();
+    assert_eq!(t.get("Obligation", missed).await["overdue"], true);
+    assert_eq!(after(missed).await.len(), 1, "a missed one still brings the next, once under two upkeeps");
+    // Who may mark it done: not a Contract Approver.
+    refused(t.set(&ca, "Obligation", missed, json!({"status": "Done"})).await, "forbidden", "");
+
+    // ───────────── amendments, and contracts under a master agreement (CTR-08) ─────────────
+    let copy = k.store_file(&both, None, "base-signed.pdf", "application/pdf", &pdf("Base, signed", 2)).await.unwrap();
+    let base = uid(&t
+        .insert(
+            &cm,
+            "Contract",
+            json!({"title": "Base services", "counterparty_name": "Globex", "counterparty_email": "legal@globex.test", "value": "5000",
+                   "starts_on": day.to_string(), "ends_on": (day + Duration::days(200)).to_string(), "notice_days": 30}),
+        )
+        .await["id"]);
+    let lead = k.load_ctx(tenant, both.user, None, "it".into()).await.unwrap();
+    t.act(&lead, base, "record_signed_copy", json!({"signed_file": copy["url"], "signed_by": "Both sides", "signed_on": day.to_string()})).await.unwrap();
+    ferrum_app_contracts::maintenance_on(&k, tenant, day).await.unwrap();
+    assert_eq!(t.status(base).await, "Active");
+    // Amend It makes a draft from the contract's terms.
+    let made = t.act(&cm, base, "amend_contract", Value::Null).await.expect("amended");
+    assert_eq!(made["entity"], "Contract");
+    let first = t.get("Contract", uid(&made["id"])).await;
+    assert_eq!(
+        (first["amends"].as_str(), first["amendment_no"].as_i64(), first["starts_on"].as_str(), first["status"].as_str(), first["value"].as_str()),
+        (Some(base.to_string().as_str()), Some(1), Some(day.to_string().as_str()), Some("Draft"), Some("5000"))
+    );
+    // One amendment at a time.
+    refused(t.act(&cm, base, "amend_contract", Value::Null).await, "invalid", "already under way");
+    t.act(&cm, uid(&first["id"]), "withdraw_contract", json!({"reason": "Started over"})).await.unwrap();
+    let second = uid(&t.act(&cm, base, "amend_contract", Value::Null).await.expect("after the first is withdrawn")["id"]);
+    assert_eq!(t.get("Contract", second).await["amendment_no"].as_i64(), Some(2));
+    // Signed, an amendment waits for its day.
+    let new_end = day + Duration::days(500);
+    t.set(
+        &cm,
+        "Contract",
+        second,
+        json!({"starts_on": (day + Duration::days(1)).to_string(), "value": "7000", "ends_on": new_end.to_string(), "notice_days": 45,
+               "auto_renew": true, "renewal_months": 6}),
+    )
+    .await
+    .expect("the amendment's terms");
+    t.act(&cm, second, "submit_contract", Value::Null).await.unwrap();
+    let paper = k.store_file(&cm, None, "amendment.pdf", "application/pdf", &pdf("Amendment", 1)).await.unwrap();
+    t.act(&cm, second, "record_signed_copy", json!({"signed_file": paper["url"], "signed_by": "Both sides", "signed_on": day.to_string()})).await.unwrap();
+    ferrum_app_contracts::maintenance_on(&k, tenant, day).await.unwrap();
+    let still = t.get("Contract", base).await;
+    assert_eq!((still["value"].as_str(), t.get("Contract", second).await["applied_on"].clone()), (Some("5000"), Value::Null), "not before its day");
+    // On its day it changes the contract, once.
+    ferrum_app_contracts::maintenance_on(&k, tenant, day + Duration::days(1)).await.unwrap();
+    ferrum_app_contracts::maintenance_on(&k, tenant, day + Duration::days(1)).await.unwrap();
+    let amended = t.get("Contract", base).await;
+    assert_eq!(
+        (
+            amended["value"].as_str(),
+            amended["ends_on"].as_str(),
+            amended["notice_days"].as_i64(),
+            amended["auto_renew"].as_bool(),
+            amended["renewal_months"].as_i64(),
+            amended["amendments"].as_i64()
+        ),
+        (Some("7000"), Some(new_end.to_string().as_str()), Some(45), Some(true), Some(6), Some(1)),
+        "on its day it changes the contract once"
+    );
+    assert_eq!(t.get("Contract", second).await["applied_on"], json!((day + Duration::days(1)).to_string()));
+    // Two upkeeps at once apply an amendment once.
+    let third = uid(&t.act(&cm, base, "amend_contract", Value::Null).await.unwrap()["id"]);
+    t.set(&cm, "Contract", third, json!({"starts_on": (day + Duration::days(2)).to_string(), "value": "9000"})).await.unwrap();
+    t.act(&cm, third, "submit_contract", Value::Null).await.unwrap();
+    t.act(&cm, third, "record_signed_copy", json!({"signed_file": paper["url"], "signed_by": "Both sides", "signed_on": day.to_string()})).await.unwrap();
+    let (a, b) = tokio::join!(
+        ferrum_app_contracts::maintenance_on(&k, tenant, day + Duration::days(2)),
+        ferrum_app_contracts::maintenance_on(&k, tenant, day + Duration::days(2))
+    );
+    a.unwrap();
+    b.unwrap();
+    let twice = t.get("Contract", base).await;
+    assert_eq!((twice["value"].as_str(), twice["amendments"].as_i64()), (Some("9000"), Some(2)), "two upkeeps at once apply an amendment once");
+    // An amendment has no term of its own; the contract's reminders follow the amended end.
+    ferrum_app_contracts::maintenance_on(&k, tenant, day + Duration::days(400)).await.unwrap();
+    ferrum_app_contracts::maintenance_on(&k, tenant, new_end - Duration::days(50)).await.unwrap();
+    for a in [second, third] {
+        assert_eq!(t.status(a).await, "Signed", "never Active or Expired");
+        assert_eq!(sent(a, "contracts.ending").await + sent(a, "contracts.renewal_notice").await, 0, "an amendment reminds nobody");
+        for action in ["renew_contract", "terminate_contract", "amend_contract"] {
+            refused(t.act(&cm, a, action, json!({"reason": "No"})).await, "invalid", "is not available");
+        }
+    }
+    assert_eq!(t.status(base).await, "Active");
+    assert_eq!(sent(base, "contracts.renewal_notice").await, 1, "the contract's reminders follow the amended end");
+    assert_eq!(t.get("Contract", base).await["notice_reminded_for"], json!(new_end.to_string()));
+    // Who may amend.
+    refused(t.act(&ca, base, "amend_contract", Value::Null).await, "forbidden", "");
+    refused(t.act(&cm, secret, "amend_contract", Value::Null).await, "not found", "");
+    // Reports count a contract once: an amendment's value is not counted beside its contract's.
+    let states = reports[0].run(&k, &t.admin, "contracts_by_state", &HashMap::new()).await.unwrap();
+    let mut tx = k.db.tenant_tx(tenant).await.unwrap();
+    let (all, kept): (i64, i64) = sqlx::query_as("select count(*), count(*) filter (where amends is null) from e_contract where tenant_id = $1")
+        .bind(tenant)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert!(all > kept, "amendments exist");
+    assert_eq!(states["totals"]["contracts"].as_i64(), Some(kept), "{states}");
+    // A master is another contract, not itself and not an amendment.
+    let under = uid(&t
+        .insert(
+            &cm,
+            "Contract",
+            json!({"title": "Order form 1", "counterparty_name": "Globex", "starts_on": day.to_string(), "ends_on": (day + Duration::days(90)).to_string()}),
+        )
+        .await["id"]);
+    let own = t.set(&cm, "Contract", under, json!({"master": under.to_string()})).await;
+    assert!(matches!(&own, Err(Error::Validation(v)) if v.iter().any(|f| f.field == "master")), "not itself: {own:?}");
+    refused(t.set(&cm, "Contract", under, json!({"master": second.to_string()})).await, "invalid", "is another contract, not an amendment");
+    t.set(&cm, "Contract", under, json!({"master": base.to_string()})).await.expect("under a master");
+    let listed = t.k.list(&cm, "Contract", &lq(ferrum_kernel::query::Filter::eq("master", base.to_string()))).await.unwrap().rows;
+    assert!(listed.iter().any(|r| r["id"] == json!(under.to_string())), "listed under its master");
+
+    // ───────────── contracts signed before, created signed, many at a time (CTR-12) ─────────────
+    let upload = |who: &Ctx, name: &str| {
+        let (k, who, name) = (k.clone(), who.clone(), name.to_string());
+        async move { k.store_file(&who, None, &name, "application/pdf", &pdf(&name, 1)).await.unwrap()["url"].as_str().unwrap().to_string() }
+    };
+    let loose = |url: String| {
+        let k = k.clone();
+        async move {
+            let id: Uuid = url.rsplit('/').next().unwrap().parse().unwrap();
+            let mut tx = k.db.tenant_tx(tenant).await.unwrap();
+            let on: (Option<String>, Option<Uuid>) = sqlx::query_as("select entity, record_id from file_object where tenant_id = $1 and id = $2")
+                .bind(tenant)
+                .bind(id)
+                .fetch_one(&mut *tx)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+            on
+        }
+    };
+    let before = |title: &str, url: &str, on: Option<String>| {
+        let mut v = json!({"title": title, "counterparty_name": "Initech", "starts_on": day.to_string(), "ends_on": (day + Duration::days(365)).to_string(),
+                           "recorded_copy": url, "recorded_signed_by": "Bill for Initech; Nora for us"});
+        if let Some(on) = on {
+            v["recorded_signed_on"] = json!(on);
+        }
+        v
+    };
+    let signed_on = (day - Duration::days(30)).to_string();
+    // A contract signed before is created signed, its copy attached to it.
+    let old_copy = upload(&legal, "old-msa.pdf").await;
+    let made = t.k.insert(&legal, "Contract", obj(before("Old MSA", &old_copy, Some(signed_on.clone())))).await.expect("created signed");
+    let old = uid(&made["id"]);
+    let got = t.get("Contract", old).await;
+    assert_eq!(
+        (got["status"].as_str(), got["signed_document"].as_str(), got["signed_elsewhere"].as_bool(), got["signed_on"].as_str()),
+        (Some("Signed"), Some(old_copy.as_str()), Some(true), Some(signed_on.as_str())),
+        "a contract signed before is created signed"
+    );
+    assert_eq!(loose(old_copy.clone()).await, (Some("Contract".to_string()), Some(old)), "its copy is attached to it");
+    ferrum_app_contracts::maintenance_on(&k, tenant, day).await.unwrap();
+    assert_eq!(t.status(old).await, "Active");
+    // An import brings in many; a refused row keeps no file on a contract; one file, one contract.
+    let (a, b, c, d) = (upload(&legal, "a.pdf").await, upload(&legal, "b.pdf").await, upload(&legal, "c.pdf").await, upload(&legal, "d.pdf").await);
+    let rows = vec![
+        before("Imported A", &a, Some(signed_on.clone())),
+        before("Imported B", &b, Some(signed_on.clone())),
+        before("Imported C", &c, Some(signed_on.clone())),
+        before("Imported D", &d, None),
+        before("Imported A again", &a, Some(signed_on.clone())),
+    ];
+    let (ids, errors) = t.k.import_rows(&legal, "Contract", &rows).await.expect("imported");
+    assert_eq!(ids.len(), 3, "three good rows: {errors:?}");
+    assert_eq!(errors.len(), 2, "{errors:?}");
+    assert_eq!(errors[0]["row"], 3);
+    assert!(errors[0].to_string().contains("recorded_signed_on"), "{errors:?}");
+    assert_eq!(errors[1]["row"], 4, "one file, one contract: {errors:?}");
+    assert_eq!(loose(d).await, (None, None), "a refused row keeps no file on a contract");
+    for id in &ids {
+        assert_eq!(t.get("Contract", uid(id)).await["status"], "Signed");
+    }
+    // Who may: not a Contract Manager; without the three fields, a draft as before.
+    let theirs = upload(&cm, "cm.pdf").await;
+    refused(t.k.insert(&cm, "Contract", obj(before("By a manager", &theirs, Some(signed_on.clone())))).await, "forbidden", "Contract Approver or Legal");
+    let plain = t
+        .insert(
+            &cm,
+            "Contract",
+            json!({"title": "Plain draft", "counterparty_name": "Initech", "starts_on": day.to_string(),
+                                                 "ends_on": (day + Duration::days(365)).to_string()}),
+        )
+        .await;
+    assert_eq!(plain["status"], "Draft");
+    // A draft is not signed by editing.
+    refused(
+        t.set(&cm, "Contract", uid(&plain["id"]), json!({"recorded_copy": theirs, "recorded_signed_by": "x", "recorded_signed_on": signed_on})).await,
+        "invalid",
+        "recorded when the contract is created",
+    );
+    // Someone else's upload is refused, and no contract is left.
+    refused(t.k.insert(&legal, "Contract", obj(before("Not theirs", &theirs, Some(signed_on.clone())))).await, "not found", "");
+    assert_eq!(loose(theirs.clone()).await, (None, None));
+    // The system (a form) cannot record a signed copy.
+    let spare = upload(&legal, "spare.pdf").await;
+    let system = Ctx::system(tenant, k.registry.schema(tenant).await.unwrap());
+    refused(t.k.insert(&system, "Contract", obj(before("By a form", &spare, Some(signed_on.clone())))).await, "forbidden", "recorded by a person");
+    let mut tx = k.db.tenant_tx(tenant).await.unwrap();
+    let none: i64 = sqlx::query_scalar("select count(*) from e_contract where tenant_id = $1 and title in ('Not theirs', 'By a form', 'By a manager')")
+        .bind(tenant)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(none, 0, "no contract left by a refused create");
+    // Obligations come in from a sheet.
+    let sheet = vec![
+        json!({"contract": old.to_string(), "description": "Annual price review", "owner": "ops@northwind.test", "due_on": (day + Duration::days(60)).to_string()}),
+        json!({"contract": old.to_string(), "description": "Insurance certificate", "owner": "ops@northwind.test", "due_on": (day + Duration::days(90)).to_string()}),
+    ];
+    let (made, failed) = t.k.import_rows(&cm, "Obligation", &sheet).await.expect("obligations imported");
+    assert_eq!((made.len(), failed.len()), (2, 0), "{failed:?}");
 }

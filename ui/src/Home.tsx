@@ -1,8 +1,9 @@
-// The contracts by stage (in the works, out for signature, active), those whose notice to stop a
-// renewal is due, and obligations open, the overdue first. Each opens its record.
+// Requests nobody has taken yet, the contracts by stage (in the works, out for signature, active), those whose
+// notice to stop a renewal is due, and obligations open, the overdue first. Each opens its record.
 
 import { useQuery } from "@tanstack/react-query";
 import { api, docPath, formatValue, t, isolate } from "@ferrum/client";
+import { can, useEntityMeta } from "@ferrum/records";
 import { Badge, ButtonLink, HomeSkeleton, LoadFailed, PageHead, PageStack, Queue, QueueGrid, QueueItem, StatusBadge, useShellTitle } from "@ferrum/kit";
 
 export interface Row {
@@ -22,12 +23,18 @@ const STAGES: Record<string, string> = {
   get Active() { return t("Active"); },
 };
 
-/** Contracts by stage, in the stages' order. */
+/** A request from a form nobody has taken yet: a draft saying who asked, with no owner. */
+export const isRequest = (c: Row) => c.status === "Draft" && Boolean(c.requested_by) && !c.owner;
+
+/** Contracts by stage, in the stages' order; requests not taken yet are not in the works yet. */
 export function byStage(list: Row[]): [string, Row[]][] {
   const order = [t("In the works"), t("Out for signature"), t("Active")];
   const out = new Map<string, Row[]>(order.map((s) => [s, []]));
   for (const c of list) {
+    if (isRequest(c)) continue;
     const stage = STAGES[String(c.status)];
+    // A signed amendment has no term of its own: its contract is the one active.
+    if (c.amends && stage === t("Active")) continue;
     if (stage) out.get(stage)?.push(c);
   }
   return order.map((s) => [s, out.get(s) ?? []]);
@@ -41,6 +48,7 @@ const LIMIT = 5;
 
 export function Home() {
   useShellTitle(t("Contracts"));
+  const meta = useEntityMeta("Contract");
   const q = useQuery({
     queryKey: ["contracts", "home"],
     queryFn: async () => {
@@ -49,9 +57,12 @@ export function Home() {
     },
   });
   const create = (
-    <ButtonLink to="/e/Contract/new" variant="primary" icon="plus">
-      {t("New contract")}
-    </ButtonLink>
+    <>
+      {can(meta.data?.permissions, "import") && <ButtonLink to="/signed-copies">{t("Bring in signed contracts")}</ButtonLink>}
+      <ButtonLink to="/e/Contract/new" variant="primary" icon="plus">
+        {t("New contract")}
+      </ButtonLink>
+    </>
   );
   if (q.isPending) return (
     <PageStack>
@@ -66,6 +77,7 @@ export function Home() {
     </PageStack>
   );
   const notice = q.data.contracts.filter((c) => c.notice_due);
+  const requests = q.data.contracts.filter(isRequest);
   // What is late comes before what is merely due.
   const obligations = [...q.data.obligations].sort((a, b) => Number(Boolean(b.overdue)) - Number(Boolean(a.overdue)));
   const summary = [notice.length && t("{n} notice due", { n: notice.length }), obligations.length && t("{n} obligations open", { n: obligations.length })].filter(Boolean).join(" · ");
@@ -75,6 +87,11 @@ export function Home() {
     <PageStack>
       <PageHead title={t("Contracts")} description={summary ? isolate(summary) : undefined} actions={create} />
       <QueueGrid>
+        {requests.length > 0 && (
+          <Queue title={t("Requests")} count={requests.length} tone="attention" more={{ to: "/e/Contract", count: requests.length - LIMIT }}>
+            {requests.slice(0, LIMIT).map((c) => contract(c, t("asked by {email}", { email: isolate(String(c.requested_by)) })))}
+          </Queue>
+        )}
         {notice.length > 0 && (
           <Queue title={t("Notice due before renewal")} count={notice.length} tone="attention" more={{ to: "/e/Contract", count: notice.length - LIMIT }}>
             {notice.slice(0, LIMIT).map((c) => contract(c, t("renews after {day}", { day: day(c.ends_on) })))}
@@ -82,7 +99,13 @@ export function Home() {
         )}
         <Queue title={t("Obligations")} count={obligations.length} tone={late ? "attention" : "default"} more={{ to: "/e/Obligation", count: obligations.length - LIMIT }}>
           {obligations.slice(0, LIMIT).map((o) => (
-            <QueueItem key={o.id} to={`/e/Obligation/${o.id}`} title={isolate(String(o.description))} meta={t("due {day}", { day: day(o.due_on) })} trailing={o.overdue ? <Badge tone="red">{t("Overdue")}</Badge> : null} />
+            <QueueItem key={o.id} to={`/e/Obligation/${o.id}`} title={isolate(String(o.description))} meta={t("due {day}", { day: day(o.due_on) })} trailing={
+                <>
+                  {Number(o.repeat_months) > 0 && <Badge tone="neutral">{t("Repeats")}</Badge>}
+                  {o.overdue ? <Badge tone="red">{t("Overdue")}</Badge> : null}
+                </>
+              }
+            />
           ))}
         </Queue>
         {byStage(q.data.contracts).map(([stage, list]) => (

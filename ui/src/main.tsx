@@ -2,62 +2,23 @@
 // with every record in the records frame's lists and forms.
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { StrictMode, useEffect } from "react";
+import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { createBrowserRouter, Link, RouterProvider, useRouteError } from "react-router";
-import { addCatalogs, routeBase, shell, t, wordsReady } from "@ferrum/client";
-import { ConfirmHost, EmptyState, ErrorState, Toaster } from "@ferrum/kit";
-import { RequireAuth, setFrameMode } from "@ferrum/records/frame";
+import { createBrowserRouter, RouterProvider } from "react-router";
+import { addCatalogs, routeBase, wordsReady } from "@ferrum/client";
+import { ConfirmHost, Toaster } from "@ferrum/kit";
+import { setFrameMode } from "@ferrum/records/frame";
+import { CONTRACTS_PACKAGES, routes } from "./routes";
 import "./styles.css";
 
 // Its own words in the page's language (src/locales), fetched as the page starts; it is drawn once they are in.
 void addCatalogs({ ar: () => import("./locales/ar.json"), hi: () => import("./locales/hi.json") });
 
-const page = (name: "FormView" | "ListView" | "ReportView") => () => import("./records").then((m) => ({ Component: m[name] }));
-
 const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false, staleTime: 5_000 } } });
 
-function RouteError() {
-  return <ErrorState error={useRouteError()} onRetry={() => window.location.reload()} />;
-}
+setFrameMode("app", CONTRACTS_PACKAGES);
 
-function NotFound() {
-  return (
-    <EmptyState title={t("Page not found")}>
-      <Link to="/">{t("Go to the contracts")}</Link>
-    </EmptyState>
-  );
-}
-
-function Started() {
-  useEffect(() => shell().ready(), []);
-  return null;
-}
-
-setFrameMode("app", ["contracts"]);
-
-const router = createBrowserRouter(
-  [
-    {
-      path: "/",
-      element: (
-        <>
-          <Started />
-          <RequireAuth />
-        </>
-      ),
-      errorElement: <RouteError />,
-      children: [
-        { index: true, lazy: () => import("./Home").then((m) => ({ Component: m.Home })) },
-        { path: "e/:entity", lazy: page("ListView") },
-        { path: "e/:entity/:id", lazy: page("FormView") },
-        { path: "r/:name", lazy: page("ReportView") },
-        { path: "*", element: <NotFound /> },
-      ],
-    },
-  ],
-  { basename: routeBase("contracts") },
-);
+const router = createBrowserRouter(routes, { basename: routeBase("contracts") });
 
 // Drawn once the page's words are in (its language's catalogs, fetched as the page starts).
 void wordsReady().then(() =>

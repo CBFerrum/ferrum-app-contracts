@@ -140,7 +140,7 @@
     - {name: document_sha256, type: data, label: Document SHA-256, read_only: true, no_copy: true}
     - {name: versions, type: table, of: ContractVersion, read_only: true, no_copy: true, description: "Each body frozen from its template, with who and when"}
     - {name: body_text, type: text, read_only: true, hidden: true, no_copy: true, description: "The words of its latest body, for search"}
-    - {name: status, type: select, options: [Draft, In Review, Approved, Out for Signature, Signed, Active, Expired, Terminated], default: Draft, read_only: true, no_copy: true, in_list: true, in_filter: true}
+    - {name: status, type: select, options: [Draft, In Review, Approved, Out for Signature, Signed, Active, Expired, Terminated, Withdrawn], default: Draft, read_only: true, no_copy: true, in_list: true, in_filter: true}
     - {name: approved_digest, type: data, read_only: true, no_copy: true, label: Approved As,
        description: "The SHA-256 of its terms, its clauses' wording and its PDF as they were approved: sent for signature only while they are still the same"}
     - {name: deviation_score, type: int, default: 0, read_only: true, no_copy: true, in_list: true, in_filter: true, description: "The sum of its clauses' deviation points against its type; above zero, Legal approves it first"}
@@ -160,7 +160,46 @@
     - {name: end_reminded_for, type: date, read_only: true, hidden: true, no_copy: true}
     - {name: terminated_on, type: date, read_only: true, no_copy: true}
     - {name: termination_reason, type: text, read_only: true, no_copy: true}
+    - {name: requested_by, type: email, in_filter: true, no_copy: true, description: "Who asked for this contract, when it came from a request form"}
+    - {name: request_note, type: text, no_copy: true, description: "What they asked for, in their words"}
+    - {name: withdrawn_on, type: date, read_only: true, no_copy: true}
+    - {name: withdrawal_reason, type: text, read_only: true, no_copy: true}
+    - {name: amends, type: link, to: Contract, read_only: true, no_copy: true, in_filter: true, description: "The contract this one amends"}
+    - {name: amendment_no, type: int, read_only: true, no_copy: true}
+    - {name: applied_on, type: date, read_only: true, no_copy: true, description: "The day its changes took effect on the contract it amends"}
+    - {name: amendments, type: int, default: 0, read_only: true, no_copy: true, description: "How many amendments have taken effect"}
+    - {name: master, type: link, to: Contract, in_filter: true, description: "The master agreement this contract is made under"}
+    - {name: recorded_copy, type: data, max_length: 100, no_copy: true, label: Signed Copy (Uploaded), description: "For a contract signed before: the /files/<id> path of its signed copy, uploaded by whoever creates it. With Signed By and Signed On it is created Signed"}
+    - {name: recorded_signed_by, type: text, no_copy: true, label: Signed By, description: "Who signed it, on each side: names people"}
+    - {name: recorded_signed_on, type: date, no_copy: true, label: Signed On (Recorded)}
+  indexes: [[amends]]
   actions:
+    - name: amend_contract
+      label: Amend It
+      permission: write
+      condition: "(doc.status == 'Signed' || doc.status == 'Active') && doc.amends == null"
+      params: []
+      contract:
+        effect: transactional_action
+        completion: "A draft amendment of this contract exists, starting from its terms; its changes take effect on the contract once it is signed and its start day has come"
+        returns: {type: object, properties: {entity: {type: string, const: Contract}, id: {type: string, format: uuid, x-ferrum-link: Contract}}}
+    - name: take_request
+      label: Take It
+      permission: write
+      condition: "doc.status == 'Draft' && doc.requested_by != null && doc.owner == null"
+      contract:
+        effect: transactional_action
+        completion: "The request has an owner, who drafts it; whoever asked is told"
+        returns: {type: object, properties: {owner: {type: string, format: email}}}
+    - name: withdraw_contract
+      label: Withdraw It
+      permission: write
+      condition: "doc.status == 'Draft' || doc.status == 'Approved'"
+      params: [{name: reason, type: text, label: Why, required: true}]
+      contract:
+        effect: transactional_action
+        completion: "The contract is Withdrawn with the reason; it is never submitted, signed, renewed or reminded. Whoever asked for it is told"
+        returns: {type: object, properties: {status: {type: string, const: Withdrawn}}}
     - name: submit_contract
       label: Submit It
       permission: write
@@ -203,10 +242,14 @@
         - {name: signed_file, type: data, label: Signed Copy, required: true, description: "The uploaded signed PDF (its /files/<id> path)"}
         - {name: signed_by, type: text, label: Signed By, required: true, description: "Who signed it, on each side"}
         - {name: signed_on, type: date, label: Signed On, required: true}
+      contract:
+        effect: transactional_action
+        completion: "The contract is Signed with a copy of the uploaded file as its signed document, marked signed elsewhere with who signed and when"
+        returns: {type: object, properties: {status: {type: string, const: Signed}}}
     - name: renew_contract
       label: Renew It
       permission: write
-      condition: "(doc.status == 'Active' || doc.status == 'Expired') && doc.renewed_by == null"
+      condition: "(doc.status == 'Active' || doc.status == 'Expired') && doc.renewed_by == null && doc.amends == null"
       contract:
         effect: transactional_action
         completion: "Its next term exists: the same contract with a later end and a new version of its body, or a new draft linked to it, as its type says"
@@ -234,7 +277,7 @@
     - name: terminate_contract
       label: Terminate It
       permission: write
-      condition: "doc.status == 'Signed' || doc.status == 'Active'"
+      condition: "(doc.status == 'Signed' || doc.status == 'Active') && doc.amends == null"
       params: [{name: reason, type: text, label: Why, required: true}]
       contract:
         effect: transactional_action
@@ -261,4 +304,14 @@
     - {name: done_on, type: date, read_only: true, no_copy: true}
     - {name: overdue, type: check, read_only: true, no_copy: true, in_list: true, in_filter: true}
     - {name: reminded_for, type: date, read_only: true, hidden: true, no_copy: true}
+    - {name: repeat_months, type: int, default: 0, min: 0, max: 120, label: Repeats Every (Months), description: "1 monthly, 3 quarterly, 12 yearly; 0: once"}
+    - {name: repeat_until, type: date, description: "The last day one is due; empty: the contract's end"}
+    - {name: evidence_required, type: check, in_filter: true, description: "It is done only with its evidence attached"}
+    - {name: evidence, type: attach, description: "The file that shows it was done"}
+    - {name: evidence_note, type: text}
+    - {name: previous, type: link, to: Obligation, read_only: true, no_copy: true, description: "The one this follows"}
+    - {name: first_due_on, type: date, read_only: true, hidden: true, no_copy: true}
+    - {name: sequence, type: int, default: 0, read_only: true, hidden: true, no_copy: true}
+  # At most one obligation follows another (nulls are distinct: a first one follows nothing).
+  unique: [[previous]]
   list: {columns: [contract, description, owner, due_on, status, overdue], sort: due_on asc}

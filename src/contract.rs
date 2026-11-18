@@ -9,6 +9,7 @@ use crate::obj;
 use async_trait::async_trait;
 use chrono::{NaiveDate, Utc};
 use ferrum_domain::util::{d, elevated, id, rows, s};
+use ferrum_kernel::messages::{Message, Recipient};
 use ferrum_kernel::{Ctx, Doc, DocHook, Error, HookCtx, Kernel, Result, Tx};
 use rust_decimal::Decimal;
 use serde_json::{Value, json};
@@ -35,6 +36,7 @@ fn terms(doc: &Doc) -> Vec<Option<String>> {
 fn kept(doc: &Doc) -> Vec<Option<String>> {
     let mut t = terms(doc);
     t.push(doc.get("notice_days").and_then(Value::as_i64).map(|v| v.to_string()));
+    t.push(s(doc, "master").map(str::to_string));
     t.extend(rows(doc, "clauses").iter().map(|c| s(c, "own_wording").map(str::trim).filter(|w| !w.is_empty()).map(str::to_string)));
     for r in rows(doc, "signatories") {
         t.extend(["name", "email", "role"].map(|k| s(&r, k).map(str::to_string)));
@@ -325,6 +327,20 @@ pub(crate) async fn follow_approvals(k: &Kernel, ctx: &Ctx, tx: &mut Tx) -> Resu
     Ok(())
 }
 
+/// The values of a contract signed elsewhere: its copy at `url`, signed on `on` by `by`, recorded by `recorder`.
+fn signed_elsewhere(url: &str, on: NaiveDate, by: &str, recorder: &str) -> Value {
+    json!({"status": "Signed", "signed_document": url, "signed_on": on.to_string(), "signed_elsewhere": true, "signed_elsewhere_by": by,
+           "decision_note": format!("Signed elsewhere, recorded by {recorder}")})
+}
+
+/// The fields a create carries for a contract signed before: its uploaded copy, who signed and when.
+const RECORDED: [&str; 3] = ["recorded_copy", "recorded_signed_by", "recorded_signed_on"];
+
+/// May someone record a contract signed elsewhere without its approval: a Contract Approver, Legal or an administrator.
+fn records_signed(ctx: &Ctx) -> bool {
+    approver(ctx) || ctx.roles.iter().any(|r| r == "Legal")
+}
+
 pub struct ContractHook;
 
 #[async_trait]
@@ -338,7 +354,8 @@ impl DocHook for ContractHook {
     }
 
     async fn before_validate(&self, hc: &mut HookCtx<'_>, doc: &mut Doc) -> Result<()> {
-        if s(doc, "owner").is_none() && !hc.ctx.email.is_empty() {
+        // Whoever drafts it owns it; one the system makes (a form's request) waits for someone to take it.
+        if s(doc, "owner").is_none() && !hc.ctx.is_system && !hc.ctx.email.is_empty() {
             doc.insert("owner".into(), json!(hc.ctx.email.to_lowercase()));
         }
         if !matches!(s(doc, "status"), Some("Draft") | None) {
@@ -399,6 +416,16 @@ impl DocHook for ContractHook {
         if d(doc, "value") < Decimal::ZERO {
             return Err(Error::field("value", "is zero or more"));
         }
+        if let Some(master) = id(doc, "master") {
+            let amends: Option<Option<Uuid>> = sqlx::query_scalar("select amends from e_contract where tenant_id = $1 and id = $2")
+                .bind(hc.ctx.tenant)
+                .bind(master)
+                .fetch_optional(&mut **hc.tx)
+                .await?;
+            if Some(master) == id(doc, "id") || amends.flatten().is_some() {
+                return Err(Error::field("master", "is another contract, not an amendment"));
+            }
+        }
         if matches!(s(doc, "status"), Some("Draft") | None) {
             for c in rows(doc, "clauses") {
                 let row: Option<(String, Option<bool>)> = sqlx::query_as("select clause_name, approved from e_clause where tenant_id = $1 and id = $2")
@@ -416,9 +443,76 @@ impl DocHook for ContractHook {
         Ok(())
     }
 
+    /// A request from a form (who asked, no owner) is made known to Legal and, unless it is confidential, to the Contract
+    /// Managers, once, as it arrives.
+    async fn after_save(&self, hc: &mut HookCtx<'_>, doc: &Doc, old: Option<&Doc>) -> Result<()> {
+        if old.is_some() {
+            return Ok(());
+        }
+        let contract = id(doc, "id").ok_or_else(|| Error::internal("a contract without an id"))?;
+        // Created signed: the copy, the creator's own loose upload, is attached to it in this transaction (another's, or
+        // one already on a record, is not found and nothing is kept), and the contract is Signed.
+        if let (Some(file), Some(by), Some(on)) =
+            (file_of(doc, "recorded_copy"), s(doc, "recorded_signed_by"), s(doc, "recorded_signed_on").and_then(|d| d.get(..10)?.parse::<NaiveDate>().ok()))
+        {
+            hc.kernel.attach_file_tx(hc.ctx, hc.tx, file, "Contract", contract).await?;
+            let values = signed_elsewhere(&format!("/files/{file}"), on, by, &hc.ctx.email);
+            hc.kernel.set_values_tx(&elevated(hc.ctx), hc.tx, "Contract", contract, obj(values)).await?;
+        }
+        if s(doc, "requested_by").is_none() || s(doc, "owner").is_some() {
+            return Ok(());
+        }
+        let roles: &[&str] = if doc.get("confidential").and_then(Value::as_bool) == Some(true) { &["Legal"] } else { &["Legal", "Contract Manager"] };
+        // ponytail: the people holding a role read here, as Edge and Comms do; Kernel::role_holders when the platform has it.
+        let people: Vec<Uuid> = sqlx::query_scalar(
+            "select distinct u.id from app_user u join user_role r on r.tenant_id = u.tenant_id and r.user_id = u.id \
+             where u.tenant_id = $1 and u.is_active and r.role = any($2)",
+        )
+        .bind(hc.ctx.tenant)
+        .bind(roles)
+        .fetch_all(&mut **hc.tx)
+        .await?;
+        if people.is_empty() {
+            return Ok(());
+        }
+        let m = Message {
+            template: "contracts.request_received".into(),
+            entity: Some("Contract".into()),
+            record: Some(contract),
+            to: people.into_iter().map(Recipient::user).collect(),
+            ..Default::default()
+        };
+        ferrum_kernel::messages::send(hc.kernel, hc.tx, hc.ctx, &m).await?;
+        Ok(())
+    }
+
     async fn validate_change(&self, hc: &mut HookCtx<'_>, old: Option<&Doc>, doc: &Doc) -> Result<()> {
+        let given: Vec<&str> = RECORDED.into_iter().filter(|f| s(doc, f).is_some()).collect();
+        // A contract signed before is created signed by a person who may record it, with all three, the copy their upload.
+        if old.is_none() && !given.is_empty() {
+            if hc.ctx.is_system {
+                return Err(Error::Forbidden("a contract signed elsewhere is recorded by a person".into()));
+            }
+            if let Some(missing) = RECORDED.into_iter().find(|f| !given.contains(f)) {
+                return Err(Error::field(missing, "a contract signed before has its copy, who signed it and the day"));
+            }
+            if file_of(doc, "recorded_copy").is_none() || !s(doc, "recorded_copy").is_some_and(|u| u.starts_with("/files/")) {
+                return Err(Error::field("recorded_copy", "is the uploaded signed copy's /files/<id> path"));
+            }
+            if s(doc, "recorded_signed_on").and_then(|d| d.get(..10)?.parse::<NaiveDate>().ok()).is_none_or(|on| on > hc.ctx.today()) {
+                return Err(Error::field("recorded_signed_on", "is today or before"));
+            }
+            if !records_signed(hc.ctx) {
+                return Err(Error::Forbidden("a contract signed elsewhere is recorded by a Contract Approver or Legal".into()));
+            }
+        }
         if hc.ctx.is_system {
             return Ok(());
+        }
+        if let Some(o) = old
+            && RECORDED.into_iter().any(|f| s(o, f) != s(doc, f))
+        {
+            return Err(Error::invalid("a signed copy is recorded when the contract is created, or with Record Signed Copy"));
         }
         if let Some(o) = old
             && !matches!(s(o, "status"), Some("Draft") | None)
@@ -485,7 +579,7 @@ impl DocHook for ContractHook {
             }
             "record_signed_copy" => {
                 // Recording one never approved is for those who may approve: an import of contracts signed before.
-                if s(doc, "status") == Some("Draft") && !approver(hc.ctx) && !hc.ctx.roles.iter().any(|r| r == "Legal") {
+                if s(doc, "status") == Some("Draft") && !records_signed(hc.ctx) {
                     return Err(Error::Forbidden("a contract signed elsewhere is recorded from its draft by a Contract Approver or Legal".into()));
                 }
                 let file = note("signed_file")
@@ -498,10 +592,70 @@ impl DocHook for ContractHook {
                 // A copy of the contract's own, read by whoever reads the contract; the caller must be able to read it.
                 // ponytail: copy_file commits on its own; a refused action after it leaves a copy on the contract.
                 let copy = hc.kernel.copy_file(hc.ctx, file, Some(("Contract", contract))).await?;
-                json!({"status": "Signed", "signed_document": copy.get("url"), "signed_on": on.to_string(), "signed_elsewhere": true,
-                       "signed_elsewhere_by": by, "decision_note": format!("Signed elsewhere, recorded by {}", hc.ctx.email)})
+                signed_elsewhere(copy.get("url").and_then(Value::as_str).unwrap_or_default(), on, &by, &hc.ctx.email)
             }
             "renew_contract" => return crate::term::renew(hc, doc).await.map(Some),
+            // On the contract's row lock: one amendment under way at a time, each starting from the terms in force.
+            "amend_contract" => {
+                let open: bool = sqlx::query_scalar(
+                    "select exists (select 1 from e_contract where tenant_id = $1 and amends = $2 and applied_on is null and status <> 'Withdrawn')",
+                )
+                .bind(hc.ctx.tenant)
+                .bind(contract)
+                .fetch_one(&mut **hc.tx)
+                .await?;
+                if open {
+                    return Err(Error::invalid("an amendment of this contract is already under way: finish or withdraw it first"));
+                }
+                let mut next = crate::term::copy_of(doc);
+                next.insert("starts_on".into(), json!(hc.ctx.today().to_string()));
+                next.insert("ends_on".into(), json!(s(doc, "ends_on")));
+                let made = hc.kernel.insert_tx(hc.ctx, hc.tx, "Contract", next).await?;
+                let amendment = id(&made, "id").ok_or_else(|| Error::internal("a contract without an id"))?;
+                let before: i64 = sqlx::query_scalar("select count(*) from e_contract where tenant_id = $1 and amends = $2")
+                    .bind(hc.ctx.tenant)
+                    .bind(contract)
+                    .fetch_one(&mut **hc.tx)
+                    .await?;
+                let link = json!({"amends": contract.to_string(), "amendment_no": before + 1, "master": s(doc, "master")});
+                hc.kernel.set_values_tx(&system, hc.tx, "Contract", amendment, obj(link)).await?;
+                return Ok(Some(json!({"entity": "Contract", "id": amendment.to_string()})));
+            }
+            // The condition read it on the locked row: a draft someone asked for, nobody owns yet.
+            "take_request" => {
+                if hc.ctx.email.is_empty() {
+                    return Err(Error::Forbidden("this account has no email address to own a contract".into()));
+                }
+                let owner = hc.ctx.email.to_lowercase();
+                hc.kernel.set_values_tx(&system, hc.tx, "Contract", contract, obj(json!({"owner": owner}))).await?;
+                crate::term::send(
+                    hc.kernel,
+                    &system,
+                    hc.tx,
+                    "contracts.request_taken",
+                    "Contract",
+                    contract,
+                    [s(doc, "requested_by").map(str::to_string), None],
+                )
+                .await?;
+                return Ok(Some(json!({"owner": owner})));
+            }
+            "withdraw_contract" => {
+                let why = note("reason").ok_or_else(|| Error::field("reason", "a withdrawal says why"))?;
+                let values = json!({"status": "Withdrawn", "withdrawn_on": hc.ctx.today().to_string(), "withdrawal_reason": why, "decision_note": null});
+                hc.kernel.set_values_tx(&system, hc.tx, "Contract", contract, obj(values)).await?;
+                crate::term::send(
+                    hc.kernel,
+                    &system,
+                    hc.tx,
+                    "contracts.request_withdrawn",
+                    "Contract",
+                    contract,
+                    [s(doc, "requested_by").map(str::to_string), None],
+                )
+                .await?;
+                return Ok(Some(json!({"status": "Withdrawn"})));
+            }
             "compare_versions" => return compare(doc, params).map(Some),
             "terminate_contract" => {
                 let why = note("reason").ok_or_else(|| Error::field("reason", "a termination says why"))?;

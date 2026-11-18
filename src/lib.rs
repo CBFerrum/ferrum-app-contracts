@@ -108,6 +108,8 @@ mod tests {
         for f in ["pty_customer", "pty_supplier", "pty_contact", "prj_project", "crm_opportunity", "sel_sales_order", "buy_purchase_order", "hr_employee"] {
             assert!(contract.field(f).is_some(), "{f}");
         }
+        assert!(schema.entity("SalesOrder").and_then(|e| e.field("sel_contract")).is_some(), "an order names its contract");
+        assert!(schema.entity("PurchaseOrder").and_then(|e| e.field("buy_contract")).is_some(), "an order names its contract");
         let on = ferrum_meta::DocumentAction::Action("approve".into());
         assert!(contract.document_approvals.contains_key(&on), "the default approval policy comes with the package");
         let alone = ferrum_meta::effective::build(&catalog, &catalog.closure(&["contracts".to_string()]).unwrap(), &[], 1).unwrap();
