@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.11.0
+
+Needs the same platform as 0.10.0. Packages: `contracts` 0.9.0 (Contract gains Amends, Amendment No, Applied On,
+Amendments and Master, an index on Amends, the action Amend It); `contracts_selling` 0.2.0 and `contracts_buying`
+0.2.0 (Sales Order and Purchase Order gain the contract they are made under). `ui/dist` rebuilt with
+Ferrum-Frontend `5e2661f`.
+
+- **Amend It** (`amend_contract`) makes a draft amendment from a signed or active contract's terms, one at a time.
+  Approved and signed like any contract, it is applied by the upkeep on its start day, once: the contract takes its
+  value, end, renewal and notice and counts the amendment. An amendment never becomes Active, never renews,
+  expires or reminds; Renew It and Terminate It are not offered on it; reports count its contract once.
+- **Master agreements.** A contract may name its master (another contract, not an amendment); orders name the
+  contract or master they are made under.
+- Renew It's new contract keeps each clause's own wording.
+
 ## 0.10.0
 
 Needs the same platform as 0.9.0. The `contracts` package is 0.8.0: Obligation gains Repeats Every (Months), Repeat

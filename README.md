@@ -233,7 +233,14 @@ governs.
 - **Notice due.** A self-renewing contract inside its notice period is flagged and shown on the home page
   under "Notice due before renewal".
 - **Terminate It.** Ends a Signed or Active contract with a required reason and the date.
-- **Counters.** The number of renewals is kept on the contract.
+- **Counters.** The number of renewals and of amendments is kept on the contract.
+- **Amend It.** A signed or active contract is changed by an amendment: a draft that starts from its terms, with
+  its own document, approved and signed like any contract. On its start day, once signed, the upkeep applies its
+  value, end date, renewal and notice to the contract, exactly once; the contract always holds the terms in force.
+  One amendment is under way at a time (withdraw it to start over). An amendment has no term of its own: it stays
+  Signed, never renews, expires or reminds, and reports count its contract once.
+- **Master agreements.** A contract may name the master agreement it is made under (another contract, not an
+  amendment), and sales and purchase orders name the contract or master they are made under.
 
 ### ⏰ Obligations and reminders
 
@@ -334,7 +341,7 @@ records are optional and appear when the matching app is installed.
 
 | Entity | What it is | Key fields or states |
 |---|---|---|
-| **Contract** | An agreement from draft to signature and through its term | Number, title, type, category, counterparty, owner, department, confidential, value, start, end, auto-renew, notice days, requested by, request note, status (Draft, In Review, Approved, Out for Signature, Signed, Active, Expired, Terminated, Withdrawn) |
+| **Contract** | An agreement from draft to signature and through its term | Number, title, type, category, counterparty, owner, department, confidential, value, start, end, auto-renew, notice days, requested by, request note, amends, amendment no, applied on, amendments, master, status (Draft, In Review, Approved, Out for Signature, Signed, Active, Expired, Terminated, Withdrawn) |
 | **Contract Type** | A kind of contract | Name, template, renewal (New Version or New Contract), clauses, disabled |
 | **Clause** | Approved wording | Name, category, text with merge fields, fallback, approved |
 | **Obligation** | A commitment or milestone | Contract, description, kind, party, owner, due on, status, overdue, repeats every, repeat until, evidence required, evidence, previous |
@@ -366,8 +373,8 @@ records are optional and appear when the matching app is installed.
 | **Sign** | Signature requests, order of signing, sealed PDF back on the contract, through Sign's operations `sign.sign_request.create`, `.update`, `.send` and `.read` (`^0.2`, declared in `uses`) | Sign installed (comes with Contracts); `FERRUM_PDF_URL` for the PDF service |
 | **Parties** (`contracts_parties`) | Customer, Supplier and Contact links on a contract | Parties app |
 | **CRM** (`contracts_crm`) | Opportunity the contract closes | CRM app |
-| **Selling** (`contracts_selling`) | Sales order the contract governs | ERP selling |
-| **Buying** (`contracts_buying`) | Purchase order the contract governs | ERP buying |
+| **Selling** (`contracts_selling`) | Sales order the contract governs; on a sales order, the contract or master it is made under | ERP selling |
+| **Buying** (`contracts_buying`) | Purchase order the contract governs; on a purchase order, the contract or master it is made under | ERP buying |
 | **Projects** (`contracts_projects`) | Project the contract governs | Projects app |
 | **HR** (`contracts_hr`) | Employee the contract is with | HR app |
 | **Documents** | Templates edited under Settings, Documents | Platform |
@@ -398,7 +405,7 @@ Compared with five contract lifecycle management products: Ironclad, DocuSign CL
 | Renewal and notice reminders | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Obligations tracked with owner and due date | ✅ | 🟡 | ✅ | ✅ | ✅ | 🟡 |
 | Recurring obligations, evidence upload | ✅ | 🟡 | ✅ | ✅ | ✅ | 🟡 |
-| Amendments and master agreements with orders beneath | ❌ | ✅ | 🟡 | ✅ | ✅ | 🟡 |
+| Amendments and master agreements with orders beneath | ✅ | ✅ | 🟡 | ✅ | ✅ | 🟡 |
 | Searchable repository by metadata | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Full-text search inside uploaded PDFs | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | AI reads a contract and fills its fields | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -435,7 +442,6 @@ Compared with five contract lifecycle management products: Ironclad, DocuSign CL
 - ✏️ **Redlining and negotiation** with the counterparty, and a counterparty portal.
 - 🤖 **AI** that reads a contract, fills its fields and checks it against a playbook.
 - 🔎 **Full-text search** inside uploaded PDFs.
-- 🧬 **Contract hierarchies**: amendments, master agreements and orders beneath them.
 - 📈 **Dashboards** and analytics, and years of integrations with other vendors' systems.
 
 > [!NOTE]
@@ -445,6 +451,7 @@ Compared with five contract lifecycle management products: Ironclad, DocuSign CL
 
 ### ✅ Recently shipped
 
+- [x] **0.11.0.** Amendments applied once on their day, contracts under a master agreement, orders naming their contract.
 - [x] **0.10.0.** Obligations that repeat, made once each, and evidence before Done.
 - [x] **0.9.0.** Requests from a form: who asked, the Requests queue, Take It, Withdraw It, and the requester told.
 - [x] **0.8.0.** Clause versions, own wording on a contract, a type's playbook with a deviation score, and Legal's
@@ -470,7 +477,6 @@ Compared with five contract lifecycle management products: Ironclad, DocuSign CL
 ### 🔜 Next up
 
 - [ ] **Redlining.** Edit a body with tracked changes and let the counterparty respond, because most contracts are negotiated.
-- [ ] **Amendments and master agreements.** A parent link with orders and statements of work beneath it.
 - [ ] **Counterparty portal** to review and sign without an account.
 
 ### 🔭 Later
