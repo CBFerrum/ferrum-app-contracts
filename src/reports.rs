@@ -36,6 +36,8 @@ fn contracts(ctx: &Ctx, columns: &str, join: &str) -> Result<QueryBuilder<Postgr
     ));
     qb.push_bind(ctx.tenant);
     scope.push_sql(&mut qb, "a");
+    // An amendment's terms are its contract's once applied: counted once, on the contract.
+    qb.push(" and a.amends is null");
     Ok(qb)
 }
 

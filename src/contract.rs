@@ -36,6 +36,7 @@ fn terms(doc: &Doc) -> Vec<Option<String>> {
 fn kept(doc: &Doc) -> Vec<Option<String>> {
     let mut t = terms(doc);
     t.push(doc.get("notice_days").and_then(Value::as_i64).map(|v| v.to_string()));
+    t.push(s(doc, "master").map(str::to_string));
     t.extend(rows(doc, "clauses").iter().map(|c| s(c, "own_wording").map(str::trim).filter(|w| !w.is_empty()).map(str::to_string)));
     for r in rows(doc, "signatories") {
         t.extend(["name", "email", "role"].map(|k| s(&r, k).map(str::to_string)));
@@ -401,6 +402,16 @@ impl DocHook for ContractHook {
         if d(doc, "value") < Decimal::ZERO {
             return Err(Error::field("value", "is zero or more"));
         }
+        if let Some(master) = id(doc, "master") {
+            let amends: Option<Option<Uuid>> = sqlx::query_scalar("select amends from e_contract where tenant_id = $1 and id = $2")
+                .bind(hc.ctx.tenant)
+                .bind(master)
+                .fetch_optional(&mut **hc.tx)
+                .await?;
+            if Some(master) == id(doc, "id") || amends.flatten().is_some() {
+                return Err(Error::field("master", "is another contract, not an amendment"));
+            }
+        }
         if matches!(s(doc, "status"), Some("Draft") | None) {
             for c in rows(doc, "clauses") {
                 let row: Option<(String, Option<bool>)> = sqlx::query_as("select clause_name, approved from e_clause where tenant_id = $1 and id = $2")
@@ -535,6 +546,32 @@ impl DocHook for ContractHook {
                        "signed_elsewhere_by": by, "decision_note": format!("Signed elsewhere, recorded by {}", hc.ctx.email)})
             }
             "renew_contract" => return crate::term::renew(hc, doc).await.map(Some),
+            // On the contract's row lock: one amendment under way at a time, each starting from the terms in force.
+            "amend_contract" => {
+                let open: bool = sqlx::query_scalar(
+                    "select exists (select 1 from e_contract where tenant_id = $1 and amends = $2 and applied_on is null and status <> 'Withdrawn')",
+                )
+                .bind(hc.ctx.tenant)
+                .bind(contract)
+                .fetch_one(&mut **hc.tx)
+                .await?;
+                if open {
+                    return Err(Error::invalid("an amendment of this contract is already under way: finish or withdraw it first"));
+                }
+                let mut next = crate::term::copy_of(doc);
+                next.insert("starts_on".into(), json!(hc.ctx.today().to_string()));
+                next.insert("ends_on".into(), json!(s(doc, "ends_on")));
+                let made = hc.kernel.insert_tx(hc.ctx, hc.tx, "Contract", next).await?;
+                let amendment = id(&made, "id").ok_or_else(|| Error::internal("a contract without an id"))?;
+                let before: i64 = sqlx::query_scalar("select count(*) from e_contract where tenant_id = $1 and amends = $2")
+                    .bind(hc.ctx.tenant)
+                    .bind(contract)
+                    .fetch_one(&mut **hc.tx)
+                    .await?;
+                let link = json!({"amends": contract.to_string(), "amendment_no": before + 1, "master": s(doc, "master")});
+                hc.kernel.set_values_tx(&system, hc.tx, "Contract", amendment, obj(link)).await?;
+                return Ok(Some(json!({"entity": "Contract", "id": amendment.to_string()})));
+            }
             // The condition read it on the locked row: a draft someone asked for, nobody owns yet.
             "take_request" => {
                 if hc.ctx.email.is_empty() {

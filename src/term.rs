@@ -20,14 +20,41 @@ use uuid::Uuid;
 
 /// One workspace's contracts and obligations as of `today`.
 pub(crate) async fn upkeep(k: &Kernel, ctx: &Ctx, tx: &mut Tx, today: NaiveDate) -> Result<()> {
-    let starting: Vec<Uuid> =
-        sqlx::query_scalar("select id from e_contract where tenant_id = $1 and status = 'Signed' and starts_on <= $2 order by id for update")
-            .bind(ctx.tenant)
-            .bind(today)
-            .fetch_all(&mut **tx)
-            .await?;
+    let starting: Vec<Uuid> = sqlx::query_scalar(
+        "select id from e_contract where tenant_id = $1 and status = 'Signed' and amends is null and starts_on <= $2 order by id for update",
+    )
+    .bind(ctx.tenant)
+    .bind(today)
+    .fetch_all(&mut **tx)
+    .await?;
     for c in starting {
         k.set_values_tx(ctx, tx, "Contract", c, obj(json!({"status": "Active"}))).await?;
+    }
+    // Signed amendments whose day has come change their contract, once: each locked, then its contract.
+    let due: Vec<(Uuid, Uuid, Value)> = sqlx::query_as(
+        "select id, amends, jsonb_build_object('value', value, 'ends_on', ends_on, 'auto_renew', auto_renew, 'renewal_months', renewal_months, \
+           'notice_days', notice_days) from e_contract where tenant_id = $1 and status = 'Signed' and amends is not null and applied_on is null \
+           and starts_on <= $2 order by signed_on, id for update",
+    )
+    .bind(ctx.tenant)
+    .bind(today)
+    .fetch_all(&mut **tx)
+    .await?;
+    for (amendment, contract, terms) in due {
+        let held: Option<(Option<String>, i64)> =
+            sqlx::query_as("select status, coalesce(amendments, 0)::bigint from e_contract where tenant_id = $1 and id = $2 for update")
+                .bind(ctx.tenant)
+                .bind(contract)
+                .fetch_optional(&mut **tx)
+                .await?;
+        let Some((Some(status), applied)) = held else { continue };
+        if !matches!(status.as_str(), "Signed" | "Active") {
+            continue;
+        }
+        let mut values = obj(terms);
+        values.insert("amendments".into(), json!(applied + 1));
+        k.set_values_tx(ctx, tx, "Contract", contract, values).await?;
+        k.set_values_tx(ctx, tx, "Contract", amendment, obj(json!({"applied_on": today.to_string()}))).await?;
     }
     let active: Vec<(Uuid, NaiveDate, Option<bool>, Option<i64>, Option<i64>, Option<i64>)> = sqlx::query_as(
         "select id, ends_on, auto_renew, renewal_months, notice_days, renewals from e_contract where tenant_id = $1 and status = 'Active' order by id for update",
@@ -145,6 +172,26 @@ pub(crate) async fn send(k: &Kernel, ctx: &Ctx, tx: &mut Tx, template: &str, ent
     Ok(())
 }
 
+/// A new contract's values from `doc`: its party, value, renewal, notice, signatories, readers, clauses with their own
+/// wording, and the links connector packages add (a customer, a deal); not its dates, which the caller sets.
+pub(crate) fn copy_of(doc: &Doc) -> Doc {
+    let lines = |table: &str, keep: &[&str]| -> Vec<Value> {
+        rows(doc, table).iter().map(|r| Value::Object(keep.iter().filter_map(|k| r.get(*k).map(|v| (k.to_string(), v.clone()))).collect())).collect()
+    };
+    let mut next = obj(json!({
+        "title": s(doc, "title"), "kind": s(doc, "kind"), "contract_type": s(doc, "contract_type"),
+        "counterparty_name": s(doc, "counterparty_name"), "counterparty_email": s(doc, "counterparty_email"),
+        "department": s(doc, "department"), "confidential": doc.get("confidential"), "value": doc.get("value"),
+        "auto_renew": doc.get("auto_renew"), "renewal_months": doc.get("renewal_months"), "notice_days": doc.get("notice_days"),
+        "signatories": lines("signatories", &["name", "email", "role", "signing_order"]),
+        "readers": lines("readers", &["email"]), "clauses": lines("clauses", &["clause", "own_wording"]),
+    }));
+    for (k, v) in doc.iter().filter(|(k, _)| ["pty_", "prj_", "crm_", "sel_", "buy_", "hr_"].iter().any(|p| k.starts_with(p))) {
+        next.insert(k.clone(), v.clone());
+    }
+    next
+}
+
 /// Renew It: the next term, as the contract's type says (a new version when it has none).
 /// * New Version: the same contract, its end moved on by its renewal months from its end, active again if it had
 ///   expired, its body made again and kept as the next version.
@@ -170,22 +217,9 @@ pub(crate) async fn renew(hc: &mut HookCtx<'_>, doc: &Doc) -> Result<Value> {
     let next_end = ends.checked_add_months(months).ok_or_else(|| Error::field("renewal_months", "is too far"))?;
     if how.as_deref() == Some("New Contract") {
         let starts = ends + chrono::Duration::days(1);
-        let lines = |table: &str, keep: &[&str]| -> Vec<Value> {
-            rows(doc, table).iter().map(|r| Value::Object(keep.iter().filter_map(|k| r.get(*k).map(|v| (k.to_string(), v.clone()))).collect())).collect()
-        };
-        let mut next = obj(json!({
-            "title": s(doc, "title"), "kind": s(doc, "kind"), "contract_type": s(doc, "contract_type"),
-            "counterparty_name": s(doc, "counterparty_name"), "counterparty_email": s(doc, "counterparty_email"),
-            "department": s(doc, "department"), "confidential": doc.get("confidential"), "value": doc.get("value"),
-            "starts_on": starts.to_string(), "ends_on": starts.checked_add_months(months).unwrap_or(next_end).to_string(),
-            "auto_renew": doc.get("auto_renew"), "renewal_months": doc.get("renewal_months"), "notice_days": doc.get("notice_days"),
-            "signatories": lines("signatories", &["name", "email", "role", "signing_order"]),
-            "readers": lines("readers", &["email"]), "clauses": lines("clauses", &["clause"]),
-        }));
-        // The links a connector package adds (a customer, a deal) go with it.
-        for (k, v) in doc.iter().filter(|(k, _)| ["pty_", "prj_", "crm_", "sel_", "buy_", "hr_"].iter().any(|p| k.starts_with(p))) {
-            next.insert(k.clone(), v.clone());
-        }
+        let mut next = copy_of(doc);
+        next.insert("starts_on".into(), json!(starts.to_string()));
+        next.insert("ends_on".into(), json!(starts.checked_add_months(months).unwrap_or(next_end).to_string()));
         let made = hc.kernel.insert_tx(hc.ctx, hc.tx, "Contract", next).await?;
         let new_id = id(&made, "id").ok_or_else(|| Error::internal("a contract without an id"))?;
         hc.kernel.set_values_tx(&system, hc.tx, "Contract", new_id, obj(json!({"previous": contract.to_string()}))).await?;

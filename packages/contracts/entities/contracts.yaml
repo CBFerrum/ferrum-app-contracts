@@ -164,7 +164,22 @@
     - {name: request_note, type: text, no_copy: true, description: "What they asked for, in their words"}
     - {name: withdrawn_on, type: date, read_only: true, no_copy: true}
     - {name: withdrawal_reason, type: text, read_only: true, no_copy: true}
+    - {name: amends, type: link, to: Contract, read_only: true, no_copy: true, in_filter: true, description: "The contract this one amends"}
+    - {name: amendment_no, type: int, read_only: true, no_copy: true}
+    - {name: applied_on, type: date, read_only: true, no_copy: true, description: "The day its changes took effect on the contract it amends"}
+    - {name: amendments, type: int, default: 0, read_only: true, no_copy: true, description: "How many amendments have taken effect"}
+    - {name: master, type: link, to: Contract, in_filter: true, description: "The master agreement this contract is made under"}
+  indexes: [[amends]]
   actions:
+    - name: amend_contract
+      label: Amend It
+      permission: write
+      condition: "(doc.status == 'Signed' || doc.status == 'Active') && doc.amends == null"
+      params: []
+      contract:
+        effect: transactional_action
+        completion: "A draft amendment of this contract exists, starting from its terms; its changes take effect on the contract once it is signed and its start day has come"
+        returns: {type: object, properties: {entity: {type: string, const: Contract}, id: {type: string, format: uuid, x-ferrum-link: Contract}}}
     - name: take_request
       label: Take It
       permission: write
@@ -227,7 +242,7 @@
     - name: renew_contract
       label: Renew It
       permission: write
-      condition: "(doc.status == 'Active' || doc.status == 'Expired') && doc.renewed_by == null"
+      condition: "(doc.status == 'Active' || doc.status == 'Expired') && doc.renewed_by == null && doc.amends == null"
       contract:
         effect: transactional_action
         completion: "Its next term exists: the same contract with a later end and a new version of its body, or a new draft linked to it, as its type says"
@@ -255,7 +270,7 @@
     - name: terminate_contract
       label: Terminate It
       permission: write
-      condition: "doc.status == 'Signed' || doc.status == 'Active'"
+      condition: "(doc.status == 'Signed' || doc.status == 'Active') && doc.amends == null"
       params: [{name: reason, type: text, label: Why, required: true}]
       contract:
         effect: transactional_action

@@ -1,5 +1,5 @@
 package: contracts_selling
-version: 0.1.0
+version: 0.2.0
 label: Contracts and Selling
 description: The sales order a contract governs, where ERP's selling is installed.
 depends: [contracts, selling]
@@ -9,3 +9,7 @@ overlays:
   - entity: Contract
     ops:
       - {op: add_field, field: {name: sel_sales_order, type: link, to: SalesOrder, label: Sales Order, in_filter: true, description: "The sales order this contract governs"}}
+  # Many orders under one contract or master agreement: the order names it.
+  - entity: SalesOrder
+    ops:
+      - {op: add_field, field: {name: sel_contract, type: link, to: Contract, label: Contract, in_filter: true, description: "The contract or master agreement this order is made under"}}

@@ -1271,4 +1271,120 @@ async fn scenario() {
     assert_eq!(after(missed).await.len(), 1, "a missed one still brings the next, once under two upkeeps");
     // Who may mark it done: not a Contract Approver.
     refused(t.set(&ca, "Obligation", missed, json!({"status": "Done"})).await, "forbidden", "");
+
+    // ───────────── amendments, and contracts under a master agreement (CTR-08) ─────────────
+    let copy = k.store_file(&both, None, "base-signed.pdf", "application/pdf", &pdf("Base, signed", 2)).await.unwrap();
+    let base = uid(&t
+        .insert(
+            &cm,
+            "Contract",
+            json!({"title": "Base services", "counterparty_name": "Globex", "counterparty_email": "legal@globex.test", "value": "5000",
+                   "starts_on": day.to_string(), "ends_on": (day + Duration::days(200)).to_string(), "notice_days": 30}),
+        )
+        .await["id"]);
+    let lead = k.load_ctx(tenant, both.user, None, "it".into()).await.unwrap();
+    t.act(&lead, base, "record_signed_copy", json!({"signed_file": copy["url"], "signed_by": "Both sides", "signed_on": day.to_string()})).await.unwrap();
+    ferrum_app_contracts::maintenance_on(&k, tenant, day).await.unwrap();
+    assert_eq!(t.status(base).await, "Active");
+    // Amend It makes a draft from the contract's terms.
+    let made = t.act(&cm, base, "amend_contract", Value::Null).await.expect("amended");
+    assert_eq!(made["entity"], "Contract");
+    let first = t.get("Contract", uid(&made["id"])).await;
+    assert_eq!(
+        (first["amends"].as_str(), first["amendment_no"].as_i64(), first["starts_on"].as_str(), first["status"].as_str(), first["value"].as_str()),
+        (Some(base.to_string().as_str()), Some(1), Some(day.to_string().as_str()), Some("Draft"), Some("5000"))
+    );
+    // One amendment at a time.
+    refused(t.act(&cm, base, "amend_contract", Value::Null).await, "invalid", "already under way");
+    t.act(&cm, uid(&first["id"]), "withdraw_contract", json!({"reason": "Started over"})).await.unwrap();
+    let second = uid(&t.act(&cm, base, "amend_contract", Value::Null).await.expect("after the first is withdrawn")["id"]);
+    assert_eq!(t.get("Contract", second).await["amendment_no"].as_i64(), Some(2));
+    // Signed, an amendment waits for its day.
+    let new_end = day + Duration::days(500);
+    t.set(
+        &cm,
+        "Contract",
+        second,
+        json!({"starts_on": (day + Duration::days(1)).to_string(), "value": "7000", "ends_on": new_end.to_string(), "notice_days": 45,
+               "auto_renew": true, "renewal_months": 6}),
+    )
+    .await
+    .expect("the amendment's terms");
+    t.act(&cm, second, "submit_contract", Value::Null).await.unwrap();
+    let paper = k.store_file(&cm, None, "amendment.pdf", "application/pdf", &pdf("Amendment", 1)).await.unwrap();
+    t.act(&cm, second, "record_signed_copy", json!({"signed_file": paper["url"], "signed_by": "Both sides", "signed_on": day.to_string()})).await.unwrap();
+    ferrum_app_contracts::maintenance_on(&k, tenant, day).await.unwrap();
+    let still = t.get("Contract", base).await;
+    assert_eq!((still["value"].as_str(), t.get("Contract", second).await["applied_on"].clone()), (Some("5000"), Value::Null), "not before its day");
+    // On its day it changes the contract, once.
+    ferrum_app_contracts::maintenance_on(&k, tenant, day + Duration::days(1)).await.unwrap();
+    ferrum_app_contracts::maintenance_on(&k, tenant, day + Duration::days(1)).await.unwrap();
+    let amended = t.get("Contract", base).await;
+    assert_eq!(
+        (
+            amended["value"].as_str(),
+            amended["ends_on"].as_str(),
+            amended["notice_days"].as_i64(),
+            amended["auto_renew"].as_bool(),
+            amended["renewal_months"].as_i64(),
+            amended["amendments"].as_i64()
+        ),
+        (Some("7000"), Some(new_end.to_string().as_str()), Some(45), Some(true), Some(6), Some(1)),
+        "on its day it changes the contract once"
+    );
+    assert_eq!(t.get("Contract", second).await["applied_on"], json!((day + Duration::days(1)).to_string()));
+    // Two upkeeps at once apply an amendment once.
+    let third = uid(&t.act(&cm, base, "amend_contract", Value::Null).await.unwrap()["id"]);
+    t.set(&cm, "Contract", third, json!({"starts_on": (day + Duration::days(2)).to_string(), "value": "9000"})).await.unwrap();
+    t.act(&cm, third, "submit_contract", Value::Null).await.unwrap();
+    t.act(&cm, third, "record_signed_copy", json!({"signed_file": paper["url"], "signed_by": "Both sides", "signed_on": day.to_string()})).await.unwrap();
+    let (a, b) = tokio::join!(
+        ferrum_app_contracts::maintenance_on(&k, tenant, day + Duration::days(2)),
+        ferrum_app_contracts::maintenance_on(&k, tenant, day + Duration::days(2))
+    );
+    a.unwrap();
+    b.unwrap();
+    let twice = t.get("Contract", base).await;
+    assert_eq!((twice["value"].as_str(), twice["amendments"].as_i64()), (Some("9000"), Some(2)), "two upkeeps at once apply an amendment once");
+    // An amendment has no term of its own; the contract's reminders follow the amended end.
+    ferrum_app_contracts::maintenance_on(&k, tenant, day + Duration::days(400)).await.unwrap();
+    ferrum_app_contracts::maintenance_on(&k, tenant, new_end - Duration::days(50)).await.unwrap();
+    for a in [second, third] {
+        assert_eq!(t.status(a).await, "Signed", "never Active or Expired");
+        assert_eq!(sent(a, "contracts.ending").await + sent(a, "contracts.renewal_notice").await, 0, "an amendment reminds nobody");
+        for action in ["renew_contract", "terminate_contract", "amend_contract"] {
+            refused(t.act(&cm, a, action, json!({"reason": "No"})).await, "invalid", "is not available");
+        }
+    }
+    assert_eq!(t.status(base).await, "Active");
+    assert_eq!(sent(base, "contracts.renewal_notice").await, 1, "the contract's reminders follow the amended end");
+    assert_eq!(t.get("Contract", base).await["notice_reminded_for"], json!(new_end.to_string()));
+    // Who may amend.
+    refused(t.act(&ca, base, "amend_contract", Value::Null).await, "forbidden", "");
+    refused(t.act(&cm, secret, "amend_contract", Value::Null).await, "not found", "");
+    // Reports count a contract once: an amendment's value is not counted beside its contract's.
+    let states = reports[0].run(&k, &t.admin, "contracts_by_state", &HashMap::new()).await.unwrap();
+    let mut tx = k.db.tenant_tx(tenant).await.unwrap();
+    let (all, kept): (i64, i64) = sqlx::query_as("select count(*), count(*) filter (where amends is null) from e_contract where tenant_id = $1")
+        .bind(tenant)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert!(all > kept, "amendments exist");
+    assert_eq!(states["totals"]["contracts"].as_i64(), Some(kept), "{states}");
+    // A master is another contract, not itself and not an amendment.
+    let under = uid(&t
+        .insert(
+            &cm,
+            "Contract",
+            json!({"title": "Order form 1", "counterparty_name": "Globex", "starts_on": day.to_string(), "ends_on": (day + Duration::days(90)).to_string()}),
+        )
+        .await["id"]);
+    let own = t.set(&cm, "Contract", under, json!({"master": under.to_string()})).await;
+    assert!(matches!(&own, Err(Error::Validation(v)) if v.iter().any(|f| f.field == "master")), "not itself: {own:?}");
+    refused(t.set(&cm, "Contract", under, json!({"master": second.to_string()})).await, "invalid", "is another contract, not an amendment");
+    t.set(&cm, "Contract", under, json!({"master": base.to_string()})).await.expect("under a master");
+    let listed = t.k.list(&cm, "Contract", &lq(ferrum_kernel::query::Filter::eq("master", base.to_string()))).await.unwrap().rows;
+    assert!(listed.iter().any(|r| r["id"] == json!(under.to_string())), "listed under its master");
 }

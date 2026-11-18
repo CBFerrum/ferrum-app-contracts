@@ -32,6 +32,8 @@ export function byStage(list: Row[]): [string, Row[]][] {
   for (const c of list) {
     if (isRequest(c)) continue;
     const stage = STAGES[String(c.status)];
+    // A signed amendment has no term of its own: its contract is the one active.
+    if (c.amends && stage === t("Active")) continue;
     if (stage) out.get(stage)?.push(c);
   }
   return order.map((s) => [s, out.get(s) ?? []]);
