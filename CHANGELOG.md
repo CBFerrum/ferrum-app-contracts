@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.8.0
+
+Needs the same platform as 0.7.0. The `contracts` package is 0.6.0: Clause gains `wording_version` and a Versions
+table; a type's clause rows gain Deviation Points and Fallback Points, the type Unlisted Points; a contract's clause
+rows gain Version, Own Wording, Deviation and Points, the contract a Deviation Score; the backfill
+`contract_deviation_zero` scores contracts made before at 0. `ui/dist` rebuilt with Ferrum-Frontend `5e2661f`.
+
+- **Clause versions.** Every change of a clause's wording is kept as a numbered version with who and when (a clause
+  from before keeps what it said as version 1 at its next change), and a contract row keeps the version it used.
+- **Own wording.** A contract may carry its own wording for a clause: it is what the body prints and what the
+  approval binds, and it is kept with the terms once out of the draft.
+- **A type's playbook.** A type's clause table says what own wording and a fallback cost, and the type what any
+  other clause costs; each draft save marks each row and sums the contract's Deviation Score.
+- **Legal's step.** The packaged policy on Approve It asks Legal first when the score is above zero. A workspace that
+  edited the policy keeps its own copy. With nobody holding Legal, such a submit is refused and nothing is kept of it.
+
 ## 0.7.0
 
 Needs the same platform as 0.6.0. The `contracts` package is 0.5.0: Version gains `text` (empty on versions kept
