@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.7.0
+
+Needs the same platform as 0.6.0. The `contracts` package is 0.5.0: Version gains `text` (empty on versions kept
+before; nothing to migrate). `ui/dist` rebuilt with Ferrum-Frontend `5e2661f`. New
+dependency `similar` (Apache-2.0).
+
+- **Every version keeps its words.** A typed contract's body was frozen at each Submit It, but only the latest body's
+  words were kept, on the contract. Each version now keeps its own (`text`), so earlier ones can be compared. A
+  renewal's version keeps none: the page is rendered from the stored record, which does not have the new end yet.
+  `body_text` stays that of the body last submitted.
+- **An attached PDF is a version.** A contract with no type gets a version at each submit of a PDF it did not have
+  before (by SHA-256), with its file and digest and no words.
+- **Compare Versions** (`contracts.contract.compare_versions`, read only, `permission: read`): the words removed and
+  added between two versions, as data, and a redline page to download. Submit It and Renew It now carry a contract.
+- Withdraw Approval's label is in the Arabic and Hindi catalogs.
+
 ## 0.6.0
 
 Needs the same platform as 0.5.0 and Sign's package at 0.2. The `contracts` package is 0.4.0. No database or interface

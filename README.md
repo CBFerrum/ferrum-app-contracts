@@ -121,8 +121,13 @@ governs.
   contract's fields, parties and clauses. Print the contract with that template at any time.
 - **A body kept by version.** Each Submit It freezes the body as a file kept on the contract and never replaced.
   The Versions table lists each one with its number, digest (SHA-256), who made it, when and why (submitted,
-  submitted again after being sent back, renewed).
-- **Contracts without a type.** A contract with no type keeps an attached PDF instead.
+  submitted again after being sent back, renewed). Each version keeps the words of its body, so earlier versions can
+  be compared. A renewal's version keeps a file and no words: its words would be those of the old term's body.
+- **Contracts without a type.** A contract with no type keeps an attached PDF instead. Each submit of a PDF it did
+  not have before is a version too, with its file and digest; the words inside a PDF are not read.
+- **Compare Versions.** Pick two version numbers and download a redline page: what was removed struck through, what
+  was added underlined, word by word. An agent calls `contracts.contract.compare_versions` and gets the same changes
+  as data. It reads only; whoever may read the contract may compare it.
 - **Numbering.** Every contract gets a number such as `CTR-2026-00001`.
 - **Category.** Sales, Purchase, Service, Non-Disclosure, Employment, Lease or Other, for filters and reports.
 
@@ -351,7 +356,7 @@ Compared with five contract lifecycle management products: Ironclad, DocuSign CL
 | Clause versions and playbooks | ❌ | ✅ | 🟡 | ✅ | ✅ | ✅ |
 | Merge fields filled from record data | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Version history of the body | 🟡¹ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Compare two versions | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Compare two versions | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Edit and redline with the counterparty | ❌ | ✅ | 🟡² | 🟡² | 🟡² | ✅ |
 | Business intake request triaged by legal | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Approval routing by value, type or department | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -410,6 +415,7 @@ Compared with five contract lifecycle management products: Ironclad, DocuSign CL
 
 ### ✅ Recently shipped
 
+- [x] **0.7.0.** Every version keeps its words, an attached PDF is a version, and Compare Versions gives a redline.
 - [x] **0.6.0.** Sign reached through its declared operations; one signed copy however many upkeeps run; notice days
   and signatories kept with the terms; Withdraw Approval.
 - [x] **0.5.0**: Upkeep runs one workspace at a time, on whichever replica is free.
@@ -430,7 +436,6 @@ Compared with five contract lifecycle management products: Ironclad, DocuSign CL
 ### 🔜 Next up
 
 - [ ] **Redlining.** Edit a body with tracked changes and let the counterparty respond, because most contracts are negotiated.
-- [ ] **Compare two versions** of a body, as the versions are already kept.
 - [ ] **Amendments and master agreements.** A parent link with orders and statements of work beneath it.
 - [ ] **Recurring obligations** with a linked clause and an evidence upload.
 - [ ] **Business intake.** A request from outside legal that legal triages into a contract.
