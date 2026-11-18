@@ -21,7 +21,7 @@ mod term;
 
 use chrono::NaiveDate;
 use ferrum_domain::reports::ReportSource;
-use ferrum_kernel::{Ctx, Doc, Error, HookRegistry, Kernel, Result};
+use ferrum_kernel::{Ctx, Doc, HookRegistry, Kernel, Result};
 use serde_json::Value;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -50,41 +50,25 @@ pub fn reports() -> Vec<Arc<dyn ReportSource>> {
     vec![Arc::new(reports::ContractReports)]
 }
 
-/// Upkeep: approvals and signatures followed, terms moved on, obligations overdue, reminders sent, each workspace
-/// on its own day.
-pub async fn maintenance(k: &Kernel) -> Result<()> {
-    upkeep(k, None).await
+/// Upkeep of one workspace: approvals and signatures followed, terms moved on, obligations overdue, reminders sent, as
+/// of the workspace's own day.
+pub async fn maintenance(k: &Kernel, tenant: Uuid) -> Result<()> {
+    upkeep(k, tenant, None).await
 }
 
-/// [`maintenance`] as if every workspace's day were `today`.
-pub async fn maintenance_on(k: &Kernel, today: NaiveDate) -> Result<()> {
-    upkeep(k, Some(today)).await
+/// [`maintenance`] as if the workspace's day were `today`.
+pub async fn maintenance_on(k: &Kernel, tenant: Uuid, today: NaiveDate) -> Result<()> {
+    upkeep(k, tenant, Some(today)).await
 }
 
-async fn upkeep(k: &Kernel, on: Option<NaiveDate>) -> Result<()> {
-    let mut tx = k.db.system_tx().await?;
-    let tenants: Vec<Uuid> = sqlx::query_scalar("select id from tenant where status = 'active' order by id").fetch_all(&mut *tx).await?;
+async fn upkeep(k: &Kernel, tenant: Uuid, on: Option<NaiveDate>) -> Result<()> {
+    let ctx = Ctx::system(tenant, k.registry.schema(tenant).await?);
+    let mut tx = k.db.tenant_tx(tenant).await?;
+    contract::follow_approvals(k, &ctx, &mut tx).await?;
+    sign::follow(k, &ctx, &mut tx).await?;
+    term::upkeep(k, &ctx, &mut tx, on.unwrap_or_else(|| ctx.today())).await?;
     tx.commit().await?;
-    let mut first_error: Option<Error> = None;
-    for tenant in tenants {
-        let run = async {
-            let schema = k.registry.schema(tenant).await?;
-            if !schema.packages.iter().any(|p| p == "contracts") {
-                return Ok(());
-            }
-            let ctx = Ctx::system(tenant, schema);
-            let mut tx = k.db.tenant_tx(tenant).await?;
-            contract::follow_approvals(k, &ctx, &mut tx).await?;
-            sign::follow(k, &ctx, &mut tx).await?;
-            term::upkeep(k, &ctx, &mut tx, on.unwrap_or_else(|| ctx.today())).await?;
-            tx.commit().await?;
-            Ok::<(), Error>(())
-        };
-        if let Err(e) = run.await {
-            first_error.get_or_insert(e);
-        }
-    }
-    first_error.map_or(Ok(()), Err)
+    Ok(())
 }
 
 /// A document from JSON.

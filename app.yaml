@@ -1,6 +1,6 @@
 id: contracts
 name: Contracts
-version: 0.4.3
+version: 0.5.0
 publisher: cbferrum
 summary: "Contracts from types and approved clauses, their body generated and kept by version, approval by policy, signature through Sign to any signatories, renewal, notice, obligations and reminders"
 description: README.md
@@ -9,7 +9,7 @@ license: AGPL-3.0-only
 homepage: https://github.com/CBFerrum/ferrum-app-contracts
 support: https://github.com/CBFerrum/ferrum-app-contracts/issues
 runtime: native
-platform: ">=0.3.2, <0.4"
+platform: ">=0.4.0, <0.5"
 # Contracts are signed through Sign: installing it installs Sign.
 requires: {sign: ">=0.1"}
 packages: [contracts]
