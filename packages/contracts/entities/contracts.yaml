@@ -165,7 +165,10 @@
       label: Submit It
       permission: write
       condition: "doc.status == 'Draft'"
-      contract: {completion: "Its body is frozen as its next version and its approval is asked: the contract is In Review, or Approved when no step applies"}
+      contract:
+        effect: transactional_action
+        completion: "Its body is frozen as its next version and its approval is asked: the contract is In Review, or Approved when no step applies"
+        returns: {type: object, properties: {status: {type: string, enum: [In Review, Approved]}, approval: {type: [object, "null"]}}}
     - name: approve
       label: Approve It
       permission: write
@@ -180,12 +183,18 @@
       permission: write
       condition: "doc.status == 'Approved'"
       params: [{name: reason, type: text, label: Why, required: true}]
-      contract: {completion: "The contract is back in its draft with the reason given, bound to no approval: its terms, notice days and signatories may change, and it is approved again only through Submit It"}
+      contract:
+        effect: transactional_action
+        completion: "The contract is back in its draft with the reason given, bound to no approval: its terms, notice days and signatories may change, and it is approved again only through Submit It"
+        returns: {type: object, properties: {status: {type: string, const: Draft}}}
     - name: send_for_signature
       label: Send for Signature
       permission: write
       condition: "doc.status == 'Approved' && doc.document != null"
-      contract: {completion: "A Sign request for the contract's PDF is made, its boxes placed on the last page and sent to its signatories in order; the contract is Out for Signature and names the request"}
+      contract:
+        effect: transactional_action
+        completion: "A Sign request for the contract's PDF is made, its boxes placed on the last page and sent to its signatories in order; the contract is Out for Signature and names the request"
+        returns: {type: object, properties: {status: {type: string, const: Out for Signature}}}
     - name: record_signed_copy
       label: Record Signed Copy
       permission: write
@@ -198,7 +207,16 @@
       label: Renew It
       permission: write
       condition: "(doc.status == 'Active' || doc.status == 'Expired') && doc.renewed_by == null"
-      contract: {completion: "Its next term exists: the same contract with a later end and a new version of its body, or a new draft linked to it, as its type says"}
+      contract:
+        effect: transactional_action
+        completion: "Its next term exists: the same contract with a later end and a new version of its body, or a new draft linked to it, as its type says"
+        returns:
+          type: object
+          properties:
+            status: {type: [string, "null"]}
+            ends_on: {type: [string, "null"], format: date}
+            entity: {type: string, const: Contract}
+            id: {type: string, format: uuid, x-ferrum-link: Contract}
     - name: compare_versions
       label: Compare Versions
       permission: read
@@ -208,6 +226,7 @@
         - {name: from, type: int, label: From Version, required: true}
         - {name: to, type: int, label: To Version, required: true}
       contract:
+        effect: query
         completion: "The words removed and added between the two versions are returned, with the redline as a file; nothing is changed"
         returns: {type: object, properties: {from: {type: integer}, to: {type: integer}, removed: {type: integer}, added: {type: integer},
                   changes: {type: array, items: {type: object, properties: {op: {type: string, enum: [equal, delete, insert]}, text: {type: string}}}},
@@ -217,7 +236,10 @@
       permission: write
       condition: "doc.status == 'Signed' || doc.status == 'Active'"
       params: [{name: reason, type: text, label: Why, required: true}]
-      contract: {completion: "The contract is Terminated on the workspace's day with the reason given; it no longer renews, expires or reminds"}
+      contract:
+        effect: transactional_action
+        completion: "The contract is Terminated on the workspace's day with the reason given; it no longer renews, expires or reminds"
+        returns: {type: object, properties: {status: {type: string, const: Terminated}}}
   numbering: {template: "CTR-{YYYY}-{seq:5}"}
   list: {columns: [number, title, counterparty_name, value, ends_on, status], sort: created_at desc}
 
