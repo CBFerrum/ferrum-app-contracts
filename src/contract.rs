@@ -29,11 +29,13 @@ fn terms(doc: &Doc) -> Vec<Option<String>> {
     t
 }
 
-/// What a contract out of its draft keeps: its terms, and its notice days and signatories, which its body prints. Apart
+/// What a contract out of its draft keeps: its terms, its clauses' own wording, and its notice days and signatories, which
+/// its body prints. Apart
 /// from `terms` so that the digest of a contract approved before them stays the same.
 fn kept(doc: &Doc) -> Vec<Option<String>> {
     let mut t = terms(doc);
     t.push(doc.get("notice_days").and_then(Value::as_i64).map(|v| v.to_string()));
+    t.extend(rows(doc, "clauses").iter().map(|c| s(c, "own_wording").map(str::trim).filter(|w| !w.is_empty()).map(str::to_string)));
     for r in rows(doc, "signatories") {
         t.extend(["name", "email", "role"].map(|k| s(&r, k).map(str::to_string)));
         t.push(r.get("signing_order").and_then(Value::as_i64).map(|v| v.to_string()));
@@ -246,6 +248,46 @@ fn compare(doc: &Doc, params: &Value) -> Result<Value> {
     }))
 }
 
+/// A contract type's playbook: each clause it lists with that clause's fallback and what own wording and the fallback
+/// cost, and what any other clause costs.
+pub(crate) struct Playbook {
+    listed: Vec<(Uuid, Option<Uuid>, i64, i64)>,
+    unlisted: i64,
+}
+
+/// The playbook of the contract's type; none without a type.
+async fn playbook(tx: &mut Tx, ctx: &Ctx, doc: &Doc) -> Result<Option<Playbook>> {
+    let Some(kind) = id(doc, "kind") else { return Ok(None) };
+    let unlisted: Option<i64> = sqlx::query_scalar("select coalesce(unlisted_points, 1)::bigint from e_contract_type where tenant_id = $1 and id = $2")
+        .bind(ctx.tenant)
+        .bind(kind)
+        .fetch_optional(&mut **tx)
+        .await?;
+    let Some(unlisted) = unlisted else { return Ok(None) };
+    let listed = sqlx::query_as(
+        "select m.clause, c.fallback, coalesce(m.deviation_points, 1)::bigint, coalesce(m.fallback_points, 0)::bigint from e_contract_type__clauses m \
+         left join e_clause c on c.tenant_id = m.tenant_id and c.id = m.clause where m.tenant_id = $1 and m.parent_id = $2 order by m.idx",
+    )
+    .bind(ctx.tenant)
+    .bind(kind)
+    .fetch_all(&mut **tx)
+    .await?;
+    Ok(Some(Playbook { listed, unlisted }))
+}
+
+/// How a contract's `clause` departs from its type's playbook, and what that costs: its own wording costs the listed
+/// clause's points, a fallback its fallback points, a clause the type does not list the type's unlisted points.
+pub(crate) fn deviation(playbook: Option<&Playbook>, clause: Option<Uuid>, own: bool) -> (&'static str, i64) {
+    let Some(p) = playbook else { return ("None", 0) };
+    if let Some(row) = p.listed.iter().find(|r| Some(r.0) == clause) {
+        return if own { ("Own Wording", row.2) } else { ("None", 0) };
+    }
+    if let Some(row) = p.listed.iter().find(|r| r.1.is_some() && r.1 == clause) {
+        return if own { ("Own Wording", row.2) } else { ("Fallback", row.3) };
+    }
+    ("Not In Type", p.unlisted)
+}
+
 /// The clauses its type makes mandatory that it does not include, neither the clause nor its fallback.
 async fn missing_mandatory(tx: &mut Tx, ctx: &Ctx, doc: &Doc) -> Result<Vec<String>> {
     let Some(kind) = id(doc, "kind") else { return Ok(vec![]) };
@@ -292,7 +334,7 @@ impl DocHook for ContractHook {
     }
 
     fn fills(&self) -> &'static [&'static str] {
-        &["owner", "clauses"]
+        &["owner", "clauses", "deviation_score"]
     }
 
     async fn before_validate(&self, hc: &mut HookCtx<'_>, doc: &mut Doc) -> Result<()> {
@@ -324,17 +366,29 @@ impl DocHook for ContractHook {
                 .await?;
             clauses = listed.into_iter().map(|c| obj(json!({"id": Uuid::now_v7().to_string(), "clause": c.to_string()}))).collect();
         }
-        // Each clause's wording as it is now, its merge fields filled from the contract.
+        // Each clause's wording as it is now, or the wording agreed for this contract, its merge fields filled from the
+        // contract; the clause's version; and how far it departs from its type's playbook.
+        let playbook = playbook(hc.tx, hc.ctx, doc).await?;
+        let mut score = 0;
         for c in &mut clauses {
-            let text: Option<String> = sqlx::query_scalar("select text from e_clause where tenant_id = $1 and id = $2")
-                .bind(hc.ctx.tenant)
-                .bind(id(c, "clause"))
-                .fetch_optional(&mut **hc.tx)
-                .await?
-                .flatten();
-            c.insert("text".into(), json!(text.map(|t| fill(&t, doc))));
+            let clause = id(c, "clause");
+            let row: Option<(Option<String>, Option<i64>)> =
+                sqlx::query_as("select text, wording_version::bigint from e_clause where tenant_id = $1 and id = $2")
+                    .bind(hc.ctx.tenant)
+                    .bind(clause)
+                    .fetch_optional(&mut **hc.tx)
+                    .await?;
+            let (text, version) = row.unwrap_or_default();
+            let own = s(c, "own_wording").map(str::trim).filter(|w| !w.is_empty()).map(str::to_string);
+            let (deviation, points) = deviation(playbook.as_ref(), clause, own.is_some());
+            score += points;
+            c.insert("text".into(), json!(own.or(text).map(|t| fill(&t, doc))));
+            c.insert("clause_version".into(), json!(version));
+            c.insert("deviation".into(), json!(deviation));
+            c.insert("points".into(), json!(points));
         }
         doc.insert("clauses".into(), Value::Array(clauses.into_iter().map(Value::Object).collect()));
+        doc.insert("deviation_score".into(), json!(score));
         Ok(())
     }
 
@@ -469,6 +523,42 @@ impl DocHook for ClauseHook {
         "contracts.clause"
     }
 
+    fn fills(&self) -> &'static [&'static str] {
+        &["wording_version", "versions"]
+    }
+
+    /// Each new wording is kept as its next version, with who and when; the same wording saved again is not one. A
+    /// clause from before versions first keeps what it said as version 1.
+    async fn before_validate(&self, hc: &mut HookCtx<'_>, doc: &mut Doc) -> Result<()> {
+        let stored: Option<Option<String>> = match id(doc, "id") {
+            Some(c) => {
+                sqlx::query_scalar("select text from e_clause where tenant_id = $1 and id = $2")
+                    .bind(hc.ctx.tenant)
+                    .bind(c)
+                    .fetch_optional(&mut **hc.tx)
+                    .await?
+            }
+            None => None,
+        };
+        if stored.as_ref().is_some_and(|was| was.as_deref() == s(doc, "text")) {
+            return Ok(());
+        }
+        let mut versions: Vec<Doc> = if stored.is_some() { rows(doc, "versions") } else { vec![] };
+        if let Some(was) = stored
+            && versions.is_empty()
+        {
+            versions.push(obj(json!({"id": Uuid::now_v7().to_string(), "version_no": 1, "text": was})));
+        }
+        let next = versions.iter().filter_map(|v| v.get("version_no").and_then(Value::as_i64)).max().unwrap_or(0) + 1;
+        let by = Some(hc.ctx.email.as_str()).filter(|e| !e.is_empty());
+        versions.push(obj(
+            json!({"id": Uuid::now_v7().to_string(), "version_no": next, "text": s(doc, "text"), "changed_by": by, "changed_at": Utc::now().to_rfc3339()}),
+        ));
+        doc.insert("wording_version".into(), json!(next));
+        doc.insert("versions".into(), Value::Array(versions.into_iter().map(Value::Object).collect()));
+        Ok(())
+    }
+
     async fn validate_change(&self, hc: &mut HookCtx<'_>, old: Option<&Doc>, doc: &Doc) -> Result<()> {
         let was = old.and_then(|o| o.get("approved")).and_then(Value::as_bool).unwrap_or(false);
         let now = doc.get("approved").and_then(Value::as_bool).unwrap_or(false);
@@ -492,6 +582,18 @@ mod tests {
         assert_eq!(fill("Paid by {{ doc.counterparty_name }} ({{doc.value}}).", &doc), "Paid by Globex (5000).");
         assert_eq!(fill("{{ doc.notice_days }} days, {{ other }} and {{ doc.x-y }}", &doc), " days, {{ other }} and {{ doc.x-y }}");
         assert_eq!(fill("unclosed {{ doc.value", &doc), "unclosed {{ doc.value");
+    }
+
+    #[test]
+    fn deviation_follows_the_playbook() {
+        let (std, fallback, other) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+        let p = Playbook { listed: vec![(std, Some(fallback), 3, 2)], unlisted: 1 };
+        assert_eq!(deviation(Some(&p), Some(std), false), ("None", 0));
+        assert_eq!(deviation(Some(&p), Some(std), true), ("Own Wording", 3));
+        assert_eq!(deviation(Some(&p), Some(fallback), false), ("Fallback", 2));
+        assert_eq!(deviation(Some(&p), Some(fallback), true), ("Own Wording", 3));
+        assert_eq!(deviation(Some(&p), Some(other), true), ("Not In Type", 1));
+        assert_eq!(deviation(None, Some(other), true), ("None", 0));
     }
 
     #[test]

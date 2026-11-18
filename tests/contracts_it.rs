@@ -234,6 +234,33 @@ async fn scenario() {
     refused(t.set(&cm, "Clause", pay, json!({"approved": true})).await, "forbidden", "a Contract Approver approves a clause");
     t.set(&ca, "Clause", pay, json!({"approved": true})).await.unwrap();
     refused(t.set(&cm, "Clause", pay, json!({"text": "Invoices are paid whenever."})).await, "forbidden", "changes only with a Contract Approver");
+    // A clause's wording is kept by version, with who changed it and when.
+    let worded = t.insert(&cm, "Clause", json!({"clause_name": "Governing words", "text": "Words in force."})).await;
+    let first = (worded.get("wording_version").and_then(Value::as_i64), worded.get("versions").and_then(|v| v[0]["changed_by"].as_str()));
+    assert_eq!(first, (Some(1), Some("cm@northwind.test")), "a clause's wording is kept by version: {worded:?}");
+    let worded = uid(&worded["id"]);
+    t.set(&ca, "Clause", worded, json!({"text": "Words in force, as amended."})).await.unwrap();
+    t.set(&ca, "Clause", worded, json!({"text": "Words in force, as amended."})).await.unwrap();
+    let w = t.get("Clause", worded).await;
+    let kept: Vec<(i64, String)> =
+        w["versions"].as_array().unwrap().iter().map(|v| (v["version_no"].as_i64().unwrap(), v["text"].as_str().unwrap().to_string())).collect();
+    assert_eq!(w["wording_version"].as_i64(), Some(2), "saved with the same words, still 2");
+    assert_eq!(kept, [(1, "Words in force.".to_string()), (2, "Words in force, as amended.".to_string())]);
+    assert_eq!(w["versions"][1]["changed_by"], "ca@northwind.test");
+    // A clause from before versions keeps what it said.
+    let mut tx = k.db.tenant_tx(tenant).await.unwrap();
+    sqlx::query("delete from e_clause__versions where tenant_id = $1 and parent_id = $2").bind(tenant).bind(worded).execute(&mut *tx).await.unwrap();
+    sqlx::query("update e_clause set wording_version = null where tenant_id = $1 and id = $2").bind(tenant).bind(worded).execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    t.set(&ca, "Clause", worded, json!({"text": "Words in force, once more."})).await.unwrap();
+    let w = t.get("Clause", worded).await;
+    let kept: Vec<(i64, String, Value)> = w["versions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| (v["version_no"].as_i64().unwrap(), v["text"].as_str().unwrap().to_string(), v["changed_by"].clone()))
+        .collect();
+    assert_eq!(kept, [(1, "Words in force, as amended.".to_string(), Value::Null), (2, "Words in force, once more.".to_string(), json!("ca@northwind.test"))]);
 
     // ───────────── drafting and approval ─────────────
     let contract = |title: &str, value: &str, from: String, to: String, clauses: Vec<Uuid>| {
@@ -597,6 +624,8 @@ async fn scenario() {
 
     // ───────────── versions keep their words, and compare (CTR-02, CTR-03) ─────────────
     t.set(&ca, "Clause", pay, json!({"text": "Invoices are paid within 30 days."})).await.unwrap();
+    // Clauses outside the type count nothing here: this compares versions, the playbook is below.
+    t.set(&cm, "ContractType", kind, json!({"unlisted_points": 0})).await.unwrap();
     let revised = uid(&t
         .insert(
             &cm,
@@ -635,6 +664,96 @@ async fn scenario() {
     refused(t.act(&cm, revised, "compare_versions", json!({"from": 1, "to": 9})).await, "invalid", "one of this contract's versions");
     let other_cm = t.user("cm-other@northwind.test", &["Contract Manager"]).await;
     refused(t.act(&other_cm, revised, "compare_versions", json!({"from": 1, "to": 2})).await, "not found", "");
+
+    // ───────────── a type's playbook and the deviation score (CTR-01) ─────────────
+    let clause = |name: &str, text: &str, fallback: Option<Uuid>| {
+        let (t, cm, ca) = (&t, cm.clone(), ca.clone());
+        let v = json!({"clause_name": name, "category": "Other", "text": text, "fallback": fallback.map(|f| f.to_string())});
+        async move {
+            let id = uid(&t.insert(&cm, "Clause", v).await["id"]);
+            t.set(&ca, "Clause", id, json!({"approved": true})).await.unwrap();
+            id
+        }
+    };
+    let pb_fb = clause("Short warranty", "Warranted for 6 months.", None).await;
+    let pb_std = clause("Warranty", "Warranted for 12 months.", Some(pb_fb)).await;
+    let pb_extra = clause("Audit right", "Either side may audit once a year.", None).await;
+    let pb = uid(&t
+        .insert(
+            &cm,
+            "ContractType",
+            json!({"type_name": "Playbook Agreement", "template": "contracts.services_agreement", "unlisted_points": 1,
+                   "clauses": [{"clause": pb_std.to_string(), "deviation_points": 3, "fallback_points": 2}]}),
+        )
+        .await["id"]);
+    let draft = |title: &str, kind: Option<Uuid>, clauses: Value| {
+        json!({"title": title, "kind": kind.map(|k| k.to_string()), "counterparty_name": "Globex", "counterparty_email": "legal@globex.test",
+               "value": "500", "starts_on": start, "ends_on": end, "clauses": clauses})
+    };
+    // Own wording is what is printed and counted.
+    let own = t
+        .insert(
+            &cm,
+            "Contract",
+            draft("Own words", Some(pb), json!([{"clause": pb_std.to_string(), "own_wording": "Warranted for {{ doc.counterparty_name }}'s 24 months."}])),
+        )
+        .await;
+    assert_eq!(
+        (own["clauses"][0]["text"].as_str(), own["clauses"][0]["deviation"].as_str(), own["clauses"][0]["points"].as_i64(), own["deviation_score"].as_i64()),
+        (Some("Warranted for Globex's 24 months."), Some("Own Wording"), Some(3), Some(3)),
+        "{own:?}"
+    );
+    assert_eq!(own["clauses"][0]["clause_version"].as_i64(), Some(1), "the version it was drafted from");
+    let own = uid(&own["id"]);
+    // A fallback and a clause outside the type are counted; a contract with no type scores nothing.
+    let mixed = t.insert(&cm, "Contract", draft("Fallback and more", Some(pb), json!([{"clause": pb_fb.to_string()}, {"clause": pb_extra.to_string()}]))).await;
+    let marks: Vec<(String, i64)> =
+        mixed["clauses"].as_array().unwrap().iter().map(|c| (c["deviation"].as_str().unwrap().to_string(), c["points"].as_i64().unwrap())).collect();
+    assert_eq!(marks, [("Fallback".to_string(), 2), ("Not In Type".to_string(), 1)]);
+    assert_eq!(mixed["deviation_score"].as_i64(), Some(3));
+    let untyped = t.insert(&cm, "Contract", draft("No type", None, json!([{"clause": pb_extra.to_string()}]))).await;
+    assert_eq!((untyped["deviation_score"].as_i64(), untyped["clauses"][0]["deviation"].as_str()), (Some(0), Some("None")));
+    // Nobody holds Legal yet: a deviating contract cannot be asked of anyone, and nothing of the submit is left.
+    assert!(t.act(&cm, own, "submit_contract", Value::Null).await.is_err(), "nobody to ask");
+    let still = t.get("Contract", own).await;
+    assert!(still["status"] == "Draft" && still["versions"].as_array().unwrap().is_empty(), "{still:?}");
+    // A deviating contract goes to Legal first, however little it is worth; one that keeps to the playbook does not.
+    let lawyer = t.user("lawyer@northwind.test", &["Legal"]).await;
+    let asked = t.act(&cm, own, "submit_contract", Value::Null).await.unwrap();
+    let steps: Vec<&str> = asked["approval"]["steps"].as_array().into_iter().flatten().filter_map(|s| s["label"].as_str()).collect();
+    assert!(steps.contains(&"Legal"), "a deviating contract goes to Legal first: {asked}");
+    assert_eq!(t.status(own).await, "In Review");
+    t.k.decide_approval(&lawyer, "Contract", own, true, Some("Agreed")).await.expect("Legal approves");
+    assert_eq!(t.status(own).await, "Approved");
+    let plain = uid(&t.insert(&cm, "Contract", draft("By the playbook", Some(pb), json!([{"clause": pb_std.to_string()}]))).await["id"]);
+    t.act(&cm, plain, "submit_contract", Value::Null).await.unwrap();
+    assert_eq!(t.status(plain).await, "Approved", "score 0, approved at once");
+    // Own wording is kept once out of the draft.
+    refused(
+        t.set(&cm, "Contract", own, json!({"clauses": [{"clause": pb_std.to_string(), "own_wording": "Warranted for ever."}]})).await,
+        "invalid",
+        "keeps its terms",
+    );
+    // A contract remembers the version it used.
+    t.set(&ca, "Clause", pb_std, json!({"text": "Warranted for 18 months."})).await.unwrap();
+    assert_eq!(t.get("Contract", own).await["clauses"][0]["clause_version"].as_i64(), Some(1));
+    // Contracts made before the score are scored zero.
+    let before = uid(&t.insert(&cm, "Contract", draft("Made before", None, json!([]))).await["id"]);
+    let mut tx = k.db.tenant_tx(tenant).await.unwrap();
+    sqlx::query("update e_contract set deviation_score = null where tenant_id = $1 and id = $2").bind(tenant).bind(before).execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    // The package's backfill, as the platform's job runs it (its `set` where its `needs`).
+    let package = ferrum_app_contracts::packages().unwrap().into_iter().find(|p| p.manifest.package == "contracts").unwrap();
+    let fill = package.manifest.backfills.iter().find(|b| b.name == "contract_deviation_zero").expect("the backfill");
+    let mut tx = k.db.tenant_tx(tenant).await.unwrap();
+    let sql = format!("update e_contract t set {} where t.tenant_id = $1 and ({})", fill.set, fill.needs);
+    sqlx::query(sqlx::AssertSqlSafe(sql)).bind(tenant).execute(&mut *tx).await.unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(t.get("Contract", before).await["deviation_score"].as_i64(), Some(0));
+    t.act(&cm, before, "submit_contract", Value::Null).await.unwrap();
+    assert_eq!(t.status(before).await, "Approved");
+    // Who may set the playbook: not a Contract Approver.
+    refused(t.set(&ca, "ContractType", pb, json!({"unlisted_points": 0})).await, "forbidden", "");
 
     // ───────────── parties as records, signatories in order (DC-65, DC-67) ─────────────
     let customer = uid(&t.insert(&t.admin, "Customer", json!({"customer_name": "Globex"})).await["id"]);

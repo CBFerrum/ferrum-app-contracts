@@ -45,14 +45,16 @@ roles:
       - {entity: Obligation, read: true, write: true, create: true, export: true}
 
 # Approval by policy (docs/api.md, "Approvals"): Submit It runs the hidden action Approve It as whoever submitted,
-# which asks a Contract Approver other than them when the contract is worth the threshold or more, and goes through
-# at once otherwise; the contract stays as it is while it waits. A workspace edits the policy in Customize (more
+# which asks Legal first when the contract departs from its type's playbook (deviation_score above zero), then a
+# Contract Approver other than them when the contract is worth the threshold or more, and goes through at once
+# otherwise; the contract stays as it is while it waits. A workspace edits the policy in Customize (more
 # steps, value bands, a type or a department, stand-ins and escalation) without code.
 approvals:
   - entity: Contract
     on: {action: approve}
     policy:
       steps:
+        - {label: Legal, approvers: {role: Legal}, when: "doc.deviation_score > 0", remind_after: P2D}
         - {label: Contract Approver, approvers: {role: Contract Approver}, when: "doc.value >= settings.ContractSettings.approval_threshold", remind_after: P2D}
       lock: true
 
@@ -167,8 +169,11 @@ seed:
 # Contracts made before confidential existed are not confidential.
 backfills:
   - {name: contract_not_confidential, entity: Contract, needs: "t.confidential is null", set: "confidential = false"}
+# Contracts made before the deviation score score nothing.
+  - {name: contract_deviation_zero, entity: Contract, needs: "t.deviation_score is null", set: "deviation_score = 0"}
 
 personal_data:
   - {entity: Contract, match: counterparty_email, name: counterparty_name, retain: "Contracts, and the drafts that led to them, kept as contract law and audit require"}
   - {entity: Contract, match: signatories.email, retain: "Who signs a contract is part of it, kept as contract law and audit require"}
   - {entity: Contract, match: readers.email, erase: [readers]}
+  - {entity: Clause, match: versions.changed_by, retain: "Who changed approved wording is the clause library's record"}

@@ -19,6 +19,8 @@
   fields:
     - {name: clause, type: link, to: Clause, required: true, in_list: true}
     - {name: mandatory, type: check, in_list: true, description: "A contract of this type is submitted only with this clause, or its fallback"}
+    - {name: deviation_points, type: int, default: 1, min: 0, max: 100, in_list: true, description: "What a contract adds to its deviation score when it carries its own wording for this clause"}
+    - {name: fallback_points, type: int, default: 0, min: 0, max: 100, in_list: true, description: "What it adds when it carries this clause's fallback instead"}
 
 - name: ContractType
   label: Contract Type
@@ -34,8 +36,18 @@
     - {name: renewal, type: select, options: [New Version, New Contract], default: New Version, in_list: true,
        description: "What Renew makes: the next term on the same contract as a new version of its body, or a new contract linked to this one"}
     - {name: clauses, type: table, of: ContractTypeClause, description: "Clauses a new contract of this type starts with, in order"}
+    - {name: unlisted_points, type: int, default: 1, min: 0, max: 100, description: "What each clause outside this list adds to a contract's deviation score"}
     - {name: disabled, type: check, in_list: true, in_filter: true}
   list: {columns: [type_name, template, renewal, disabled], sort: type_name asc}
+
+- name: ClauseVersion
+  label: Version
+  kind: child
+  fields:
+    - {name: version_no, type: int, label: Version, read_only: true, in_list: true}
+    - {name: text, type: markdown, read_only: true}
+    - {name: changed_by, type: email, read_only: true, in_list: true}
+    - {name: changed_at, type: datetime, read_only: true, in_list: true}
 
 - name: Clause
   label: Clause
@@ -51,6 +63,8 @@
        description: "Its wording. {{ doc.<field> }} is filled from the contract it is in (counterparty_name, starts_on, value...) when the contract is drafted"}
     - {name: fallback, type: link, to: Clause, description: "The wording offered instead when this one is refused: a contract may include it in this one's place"}
     - {name: approved, type: check, in_list: true, in_filter: true}
+    - {name: wording_version, type: int, label: Version, read_only: true, no_copy: true, in_list: true, description: "The number of its wording now"}
+    - {name: versions, type: table, of: ClauseVersion, read_only: true, no_copy: true, description: "Each wording it has had, with who changed it and when"}
   list: {columns: [clause_name, category, approved], sort: clause_name asc}
 
 - name: ContractClause
@@ -58,7 +72,11 @@
   kind: child
   fields:
     - {name: clause, type: link, to: Clause, required: true, in_list: true}
-    - {name: text, type: markdown, read_only: true, description: "The clause's wording when the contract was drafted, its merge fields filled"}
+    - {name: text, type: markdown, read_only: true, description: "The clause's wording when the contract was drafted, or its own wording, its merge fields filled"}
+    - {name: clause_version, type: int, label: Version, read_only: true, description: "The clause's version when the contract was drafted"}
+    - {name: own_wording, type: markdown, description: "Wording agreed for this contract in place of the library's. It counts as a deviation"}
+    - {name: deviation, type: select, options: [None, Fallback, Own Wording, Not In Type], read_only: true, in_list: true}
+    - {name: points, type: int, read_only: true, in_list: true}
 
 - name: ContractSignatory
   label: Signatory
@@ -125,6 +143,7 @@
     - {name: status, type: select, options: [Draft, In Review, Approved, Out for Signature, Signed, Active, Expired, Terminated], default: Draft, read_only: true, no_copy: true, in_list: true, in_filter: true}
     - {name: approved_digest, type: data, read_only: true, no_copy: true, label: Approved As,
        description: "The SHA-256 of its terms, its clauses' wording and its PDF as they were approved: sent for signature only while they are still the same"}
+    - {name: deviation_score, type: int, default: 0, read_only: true, no_copy: true, in_list: true, in_filter: true, description: "The sum of its clauses' deviation points against its type; above zero, Legal approves it first"}
     - {name: decision_note, type: text, read_only: true, no_copy: true}
     - {name: submitted_by, type: email, read_only: true, no_copy: true, description: "Who last submitted it: the only one who asks for its approval"}
     - {name: sign_request, type: link, to: SignRequest, read_only: true, no_copy: true}
