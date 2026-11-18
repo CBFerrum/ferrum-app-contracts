@@ -6,6 +6,8 @@
   "Notice due before renewal": "नवीनीकरण से पहले सूचना देय",
   "Obligations": "दायित्व",
   "Out for signature": "हस्ताक्षर के लिए भेजा",
+  "Requests": "अनुरोध",
+  "asked by {email}": "{email} ने माँगा",
   "due {day}": "देय {day}",
   "renews after {day}": "{day} के बाद नवीनीकरण",
   "{n} notice due": "{n} सूचनाएँ देय",

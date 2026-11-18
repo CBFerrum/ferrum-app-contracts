@@ -9,6 +9,7 @@ use crate::obj;
 use async_trait::async_trait;
 use chrono::{NaiveDate, Utc};
 use ferrum_domain::util::{d, elevated, id, rows, s};
+use ferrum_kernel::messages::{Message, Recipient};
 use ferrum_kernel::{Ctx, Doc, DocHook, Error, HookCtx, Kernel, Result, Tx};
 use rust_decimal::Decimal;
 use serde_json::{Value, json};
@@ -338,7 +339,8 @@ impl DocHook for ContractHook {
     }
 
     async fn before_validate(&self, hc: &mut HookCtx<'_>, doc: &mut Doc) -> Result<()> {
-        if s(doc, "owner").is_none() && !hc.ctx.email.is_empty() {
+        // Whoever drafts it owns it; one the system makes (a form's request) waits for someone to take it.
+        if s(doc, "owner").is_none() && !hc.ctx.is_system && !hc.ctx.email.is_empty() {
             doc.insert("owner".into(), json!(hc.ctx.email.to_lowercase()));
         }
         if !matches!(s(doc, "status"), Some("Draft") | None) {
@@ -413,6 +415,37 @@ impl DocHook for ContractHook {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// A request from a form (who asked, no owner) is made known to Legal and, unless it is confidential, to the Contract
+    /// Managers, once, as it arrives.
+    async fn after_save(&self, hc: &mut HookCtx<'_>, doc: &Doc, old: Option<&Doc>) -> Result<()> {
+        if old.is_some() || s(doc, "requested_by").is_none() || s(doc, "owner").is_some() {
+            return Ok(());
+        }
+        let contract = id(doc, "id").ok_or_else(|| Error::internal("a contract without an id"))?;
+        let roles: &[&str] = if doc.get("confidential").and_then(Value::as_bool) == Some(true) { &["Legal"] } else { &["Legal", "Contract Manager"] };
+        // ponytail: the people holding a role read here, as Edge and Comms do; Kernel::role_holders when the platform has it.
+        let people: Vec<Uuid> = sqlx::query_scalar(
+            "select distinct u.id from app_user u join user_role r on r.tenant_id = u.tenant_id and r.user_id = u.id \
+             where u.tenant_id = $1 and u.is_active and r.role = any($2)",
+        )
+        .bind(hc.ctx.tenant)
+        .bind(roles)
+        .fetch_all(&mut **hc.tx)
+        .await?;
+        if people.is_empty() {
+            return Ok(());
+        }
+        let m = Message {
+            template: "contracts.request_received".into(),
+            entity: Some("Contract".into()),
+            record: Some(contract),
+            to: people.into_iter().map(Recipient::user).collect(),
+            ..Default::default()
+        };
+        ferrum_kernel::messages::send(hc.kernel, hc.tx, hc.ctx, &m).await?;
         Ok(())
     }
 
@@ -502,6 +535,41 @@ impl DocHook for ContractHook {
                        "signed_elsewhere_by": by, "decision_note": format!("Signed elsewhere, recorded by {}", hc.ctx.email)})
             }
             "renew_contract" => return crate::term::renew(hc, doc).await.map(Some),
+            // The condition read it on the locked row: a draft someone asked for, nobody owns yet.
+            "take_request" => {
+                if hc.ctx.email.is_empty() {
+                    return Err(Error::Forbidden("this account has no email address to own a contract".into()));
+                }
+                let owner = hc.ctx.email.to_lowercase();
+                hc.kernel.set_values_tx(&system, hc.tx, "Contract", contract, obj(json!({"owner": owner}))).await?;
+                crate::term::send(
+                    hc.kernel,
+                    &system,
+                    hc.tx,
+                    "contracts.request_taken",
+                    "Contract",
+                    contract,
+                    [s(doc, "requested_by").map(str::to_string), None],
+                )
+                .await?;
+                return Ok(Some(json!({"owner": owner})));
+            }
+            "withdraw_contract" => {
+                let why = note("reason").ok_or_else(|| Error::field("reason", "a withdrawal says why"))?;
+                let values = json!({"status": "Withdrawn", "withdrawn_on": hc.ctx.today().to_string(), "withdrawal_reason": why, "decision_note": null});
+                hc.kernel.set_values_tx(&system, hc.tx, "Contract", contract, obj(values)).await?;
+                crate::term::send(
+                    hc.kernel,
+                    &system,
+                    hc.tx,
+                    "contracts.request_withdrawn",
+                    "Contract",
+                    contract,
+                    [s(doc, "requested_by").map(str::to_string), None],
+                )
+                .await?;
+                return Ok(Some(json!({"status": "Withdrawn"})));
+            }
             "compare_versions" => return compare(doc, params).map(Some),
             "terminate_contract" => {
                 let why = note("reason").ok_or_else(|| Error::field("reason", "a termination says why"))?;

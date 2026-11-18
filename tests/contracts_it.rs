@@ -1077,4 +1077,96 @@ async fn scenario() {
     let after = t.get("Contract", unused).await;
     assert!(after["status"] == "Approved" && after["sign_request"].is_null(), "it stays approved, no request");
     assert_eq!(requests(unused).await, 0, "nothing left of the refused call");
+
+    // ───────────── requests from a form: the queue, Take It, Withdraw It (CTR-05) ─────────────
+    // A form's response arrives as the system makes it: a draft with who asked and no owner.
+    let system = Ctx::system(tenant, k.registry.schema(tenant).await.unwrap());
+    let asked = |title: &str, confidential: bool| {
+        json!({"title": title, "counterparty_name": "Initech", "starts_on": day.to_string(), "ends_on": (day + Duration::days(365)).to_string(),
+               "requested_by": "asker@outside.test", "request_note": "We need an NDA before the demo", "confidential": confidential})
+    };
+    let sent = |record: Uuid, template: &'static str| {
+        let k = k.clone();
+        async move {
+            let mut tx = k.db.tenant_tx(tenant).await.unwrap();
+            let n: i64 = sqlx::query_scalar("select count(*) from message_send where tenant_id = $1 and record_id = $2 and template = $3")
+                .bind(tenant)
+                .bind(record)
+                .bind(template)
+                .fetch_one(&mut *tx)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+            n
+        }
+    };
+    let request = t.insert(&system, "Contract", asked("NDA for the demo", false)).await;
+    assert!(request["owner"].is_null(), "a request arrives without an owner: {request:?}");
+    let request = uid(&request["id"]);
+    // Legal and the Contract Managers are told, each once: cm, lead, cm-other, cm2, lawyer, counsel.
+    assert_eq!(sent(request, "contracts.request_received").await, 6, "Legal and the Contract Managers are told");
+    // One person takes it.
+    let lead = k.load_ctx(tenant, both.user, None, "it".into()).await.unwrap();
+    let taken = t.act(&cm, request, "take_request", Value::Null).await.expect("taken");
+    assert_eq!(taken["owner"], "cm@northwind.test");
+    refused(t.act(&lead, request, "take_request", Value::Null).await, "invalid", "is not available");
+    assert_eq!(t.get("Contract", request).await["owner"], "cm@northwind.test");
+    assert_eq!(sent(request, "contracts.request_taken").await, 1, "whoever asked is told, once");
+    // A contract a person drafts is not a request.
+    let drafted = uid(&t
+        .insert(
+            &cm,
+            "Contract",
+            json!({"title": "Drafted here", "counterparty_name": "Initech", "starts_on": day.to_string(),
+                                                         "ends_on": (day + Duration::days(365)).to_string()}),
+        )
+        .await["id"]);
+    assert_eq!(sent(drafted, "contracts.request_received").await, 0);
+    refused(t.act(&cm, drafted, "take_request", Value::Null).await, "invalid", "is not available");
+    // A draft is withdrawn saying why; nothing leads out of Withdrawn.
+    let unwanted = uid(&t.insert(&system, "Contract", asked("Not needed after all", false)).await["id"]);
+    refused(t.act(&cm, unwanted, "withdraw_contract", Value::Null).await, "invalid", "says why");
+    t.act(&cm, unwanted, "withdraw_contract", json!({"reason": "The demo was cancelled"})).await.expect("withdrawn");
+    let gone = t.get("Contract", unwanted).await;
+    assert_eq!(
+        (gone["status"].as_str(), gone["withdrawn_on"].as_str(), gone["withdrawal_reason"].as_str()),
+        (Some("Withdrawn"), Some(day.to_string().as_str()), Some("The demo was cancelled"))
+    );
+    assert_eq!(sent(unwanted, "contracts.request_withdrawn").await, 1, "whoever asked is told");
+    for action in ["submit_contract", "send_for_signature", "take_request", "withdraw_approval"] {
+        refused(t.act(&cm, unwanted, action, json!({"reason": "again"})).await, "invalid", "is not available");
+    }
+    // An approved contract can be withdrawn; one in review cannot.
+    t.act(&cm, drafted, "submit_contract", Value::Null).await.unwrap();
+    t.act(&cm, drafted, "withdraw_contract", json!({"reason": "Signed on paper by the other side's form"})).await.expect("an approved one");
+    assert_eq!(t.status(drafted).await, "Withdrawn");
+    let reviewed = uid(&t
+        .insert(
+            &cm,
+            "Contract",
+            json!({"title": "In review", "counterparty_name": "Initech", "value": "250000", "starts_on": day.to_string(),
+                                                         "ends_on": (day + Duration::days(365)).to_string()}),
+        )
+        .await["id"]);
+    t.act(&cm, reviewed, "submit_contract", Value::Null).await.unwrap();
+    assert_eq!(t.status(reviewed).await, "In Review");
+    refused(t.act(&cm, reviewed, "withdraw_contract", json!({"reason": "No"})).await, "invalid", "is not available");
+    // Who may take and withdraw: nobody without a Contracts role; a Contract Manager not a confidential request they cannot read.
+    let other = t.insert(&system, "Contract", asked("Another request", false)).await;
+    let other = uid(&other["id"]);
+    let nobody = k.load_ctx(tenant, nobody.user, None, "it".into()).await.unwrap();
+    for action in ["take_request", "withdraw_contract"] {
+        let r = t.act(&nobody, other, action, json!({"reason": "Mine"})).await;
+        assert!(matches!(r, Err(Error::Forbidden(_) | Error::NotFound(_))), "{action}: {r:?}");
+    }
+    let secret = uid(&t.insert(&system, "Contract", asked("A confidential request", true)).await["id"]);
+    refused(t.act(&cm, secret, "take_request", Value::Null).await, "not found", "");
+    // The upkeep leaves a withdrawn contract alone, a year on.
+    ferrum_app_contracts::maintenance_on(&k, tenant, day + Duration::days(366)).await.unwrap();
+    assert_eq!(t.status(unwanted).await, "Withdrawn");
+    assert_eq!(sent(unwanted, "contracts.ending").await + sent(unwanted, "contracts.renewal_notice").await, 0, "no reminder");
+    // An erasure blanks who asked, and the contract remains.
+    t.k.erase_personal_data(&t.admin, "asker@outside.test", "asked").await.expect("erased");
+    let blank = t.get("Contract", request).await;
+    assert!(blank["requested_by"].is_null() && blank["request_note"].is_null() && blank["title"] == "NDA for the demo", "{blank:?}");
 }

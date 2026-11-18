@@ -59,6 +59,33 @@ approvals:
       lock: true
 
 messages:
+  - key: contracts.request_received
+    label: Contract requested
+    entity: Contract
+    category: operational
+    channels: [email, inapp]
+    languages:
+      en:
+        email: {subject: "Contract requested: {{ doc.title }}", body: "<p>{{ doc.requested_by }} asks for a contract with {{ doc.counterparty_name }}: {{ doc.title }}.</p><p>{{ doc.request_note }}</p><p>Take it to own it, or withdraw it saying why.</p>"}
+        inapp: {title: "Contract requested: {{ doc.title }}", text: "{{ doc.requested_by }}"}
+  - key: contracts.request_taken
+    label: Contract request taken up
+    entity: Contract
+    category: operational
+    channels: [email, inapp]
+    languages:
+      en:
+        email: {subject: "Your contract request was taken up: {{ doc.title }}", body: "<p>{{ doc.owner }} drafts {{ doc.title }} with {{ doc.counterparty_name }} and will be in touch.</p>"}
+        inapp: {title: "Your contract request was taken up: {{ doc.title }}", text: "{{ doc.owner }}"}
+  - key: contracts.request_withdrawn
+    label: Contract request withdrawn
+    entity: Contract
+    category: operational
+    channels: [email, inapp]
+    languages:
+      en:
+        email: {subject: "Your contract request was withdrawn: {{ doc.title }}", body: "<p>{{ doc.title }} with {{ doc.counterparty_name }} was withdrawn: {{ doc.withdrawal_reason }}</p>"}
+        inapp: {title: "Your contract request was withdrawn: {{ doc.title }}", text: "{{ doc.withdrawal_reason }}"}
   - key: contracts.obligation_due
     label: Obligation due
     entity: Obligation
@@ -176,4 +203,5 @@ personal_data:
   - {entity: Contract, match: counterparty_email, name: counterparty_name, retain: "Contracts, and the drafts that led to them, kept as contract law and audit require"}
   - {entity: Contract, match: signatories.email, retain: "Who signs a contract is part of it, kept as contract law and audit require"}
   - {entity: Contract, match: readers.email, erase: [readers]}
+  - {entity: Contract, match: requested_by, erase: [requested_by, request_note]}
   - {entity: Clause, match: versions.changed_by, retain: "Who changed approved wording is the clause library's record"}

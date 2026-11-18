@@ -115,7 +115,8 @@ async fn remind(k: &Kernel, ctx: &Ctx, tx: &mut Tx, today: NaiveDate) -> Result<
     Ok(())
 }
 
-async fn send(k: &Kernel, ctx: &Ctx, tx: &mut Tx, template: &str, entity: &str, record: Uuid, to: [Option<String>; 2]) -> Result<()> {
+/// Message `template` about `entity` `record` to the addresses in `to`, once each, in `tx`.
+pub(crate) async fn send(k: &Kernel, ctx: &Ctx, tx: &mut Tx, template: &str, entity: &str, record: Uuid, to: [Option<String>; 2]) -> Result<()> {
     let mut people: Vec<String> = to.into_iter().flatten().map(|e| e.trim().to_lowercase()).filter(|e| !e.is_empty()).collect();
     people.dedup();
     if people.is_empty() {

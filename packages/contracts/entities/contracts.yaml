@@ -140,7 +140,7 @@
     - {name: document_sha256, type: data, label: Document SHA-256, read_only: true, no_copy: true}
     - {name: versions, type: table, of: ContractVersion, read_only: true, no_copy: true, description: "Each body frozen from its template, with who and when"}
     - {name: body_text, type: text, read_only: true, hidden: true, no_copy: true, description: "The words of its latest body, for search"}
-    - {name: status, type: select, options: [Draft, In Review, Approved, Out for Signature, Signed, Active, Expired, Terminated], default: Draft, read_only: true, no_copy: true, in_list: true, in_filter: true}
+    - {name: status, type: select, options: [Draft, In Review, Approved, Out for Signature, Signed, Active, Expired, Terminated, Withdrawn], default: Draft, read_only: true, no_copy: true, in_list: true, in_filter: true}
     - {name: approved_digest, type: data, read_only: true, no_copy: true, label: Approved As,
        description: "The SHA-256 of its terms, its clauses' wording and its PDF as they were approved: sent for signature only while they are still the same"}
     - {name: deviation_score, type: int, default: 0, read_only: true, no_copy: true, in_list: true, in_filter: true, description: "The sum of its clauses' deviation points against its type; above zero, Legal approves it first"}
@@ -160,7 +160,28 @@
     - {name: end_reminded_for, type: date, read_only: true, hidden: true, no_copy: true}
     - {name: terminated_on, type: date, read_only: true, no_copy: true}
     - {name: termination_reason, type: text, read_only: true, no_copy: true}
+    - {name: requested_by, type: email, in_filter: true, no_copy: true, description: "Who asked for this contract, when it came from a request form"}
+    - {name: request_note, type: text, no_copy: true, description: "What they asked for, in their words"}
+    - {name: withdrawn_on, type: date, read_only: true, no_copy: true}
+    - {name: withdrawal_reason, type: text, read_only: true, no_copy: true}
   actions:
+    - name: take_request
+      label: Take It
+      permission: write
+      condition: "doc.status == 'Draft' && doc.requested_by != null && doc.owner == null"
+      contract:
+        effect: transactional_action
+        completion: "The request has an owner, who drafts it; whoever asked is told"
+        returns: {type: object, properties: {owner: {type: string, format: email}}}
+    - name: withdraw_contract
+      label: Withdraw It
+      permission: write
+      condition: "doc.status == 'Draft' || doc.status == 'Approved'"
+      params: [{name: reason, type: text, label: Why, required: true}]
+      contract:
+        effect: transactional_action
+        completion: "The contract is Withdrawn with the reason; it is never submitted, signed, renewed or reminded. Whoever asked for it is told"
+        returns: {type: object, properties: {status: {type: string, const: Withdrawn}}}
     - name: submit_contract
       label: Submit It
       permission: write
