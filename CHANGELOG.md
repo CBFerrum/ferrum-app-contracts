@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.10.0
+
+Needs the same platform as 0.9.0. The `contracts` package is 0.8.0: Obligation gains Repeats Every (Months), Repeat
+Until, Evidence Required, Evidence, Evidence Note, Previous and two hidden counters, with a unique key on Previous;
+existing obligations repeat nothing and need no evidence. `ui/dist` rebuilt with Ferrum-Frontend `5e2661f`.
+
+- **Obligations that repeat.** Done, or past its day, a repeating obligation makes the next one, counted from the
+  first due date, until its last day or the contract's end; never for a withdrawn, terminated or expired contract.
+  At most one follows each, however many saves and upkeeps run (a unique key on Previous, under the row lock).
+- **Evidence before Done**, when the obligation requires it.
+- Obligation owners are declared personal data (kept with the record) and handed over when someone leaves.
+- The home page marks repeating obligations.
+
 ## 0.9.0
 
 Needs the same platform as 0.8.0. The `contracts` package is 0.7.0: Contract gains Requested By, Request Note,

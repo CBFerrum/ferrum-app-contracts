@@ -240,6 +240,12 @@ governs.
 - **Obligation.** Something a contract commits to, or a milestone in it. It has a contract, a description, a kind
   (Obligation or Milestone), whose it is (Us or Counterparty), an owner, a due date and a status (Open or Done).
 - **Overdue** is set when a date passes with the obligation open. The home page puts the overdue ones first.
+- **Obligations that repeat.** Repeats Every (Months) makes the next one when this one is done or its day has
+  passed, whichever comes first, exactly once, until Repeat Until or the contract's end. Each day is counted from the
+  first, so a duty due on the 31st falls on the last day of a shorter month and on the 31st again after it. A
+  withdrawn, terminated or expired contract grows no more. The home page marks a repeating obligation.
+- **Evidence before Done.** Evidence Required: the obligation is Done only with its evidence file attached.
+- **A leaver's open obligations** pass to whoever takes over their work (the platform's handover).
 - **Reminders.** Reminder Days before an obligation is due, before a self-renewing contract's notice date and
   before a non-renewing contract ends, the owners are told once, by mail and in the app, using three message
   templates (`contracts.obligation_due`, `contracts.renewal_notice`, `contracts.ending`) that a workspace edits
@@ -331,7 +337,7 @@ records are optional and appear when the matching app is installed.
 | **Contract** | An agreement from draft to signature and through its term | Number, title, type, category, counterparty, owner, department, confidential, value, start, end, auto-renew, notice days, requested by, request note, status (Draft, In Review, Approved, Out for Signature, Signed, Active, Expired, Terminated, Withdrawn) |
 | **Contract Type** | A kind of contract | Name, template, renewal (New Version or New Contract), clauses, disabled |
 | **Clause** | Approved wording | Name, category, text with merge fields, fallback, approved |
-| **Obligation** | A commitment or milestone | Contract, description, kind, party, owner, due on, status, overdue |
+| **Obligation** | A commitment or milestone | Contract, description, kind, party, owner, due on, status, overdue, repeats every, repeat until, evidence required, evidence, previous |
 | **Contract Settings** | Workspace settings | Approval threshold, signatory name and email, reminder days |
 | Type Clause (child) | A clause a type starts with | Clause, mandatory |
 | Clause on contract (child) | A clause as drafted | Clause, text as drafted |
@@ -391,7 +397,7 @@ Compared with five contract lifecycle management products: Ironclad, DocuSign CL
 | Record a contract signed on paper | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Renewal and notice reminders | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Obligations tracked with owner and due date | ✅ | 🟡 | ✅ | ✅ | ✅ | 🟡 |
-| Recurring obligations, evidence upload | ❌ | 🟡 | ✅ | ✅ | ✅ | 🟡 |
+| Recurring obligations, evidence upload | ✅ | 🟡 | ✅ | ✅ | ✅ | 🟡 |
 | Amendments and master agreements with orders beneath | ❌ | ✅ | 🟡 | ✅ | ✅ | 🟡 |
 | Searchable repository by metadata | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Full-text search inside uploaded PDFs | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -439,6 +445,7 @@ Compared with five contract lifecycle management products: Ironclad, DocuSign CL
 
 ### ✅ Recently shipped
 
+- [x] **0.10.0.** Obligations that repeat, made once each, and evidence before Done.
 - [x] **0.9.0.** Requests from a form: who asked, the Requests queue, Take It, Withdraw It, and the requester told.
 - [x] **0.8.0.** Clause versions, own wording on a contract, a type's playbook with a deviation score, and Legal's
   step in the approval policy for a contract that departs from it.
@@ -464,7 +471,6 @@ Compared with five contract lifecycle management products: Ironclad, DocuSign CL
 
 - [ ] **Redlining.** Edit a body with tracked changes and let the counterparty respond, because most contracts are negotiated.
 - [ ] **Amendments and master agreements.** A parent link with orders and statements of work beneath it.
-- [ ] **Recurring obligations** with a linked clause and an evidence upload.
 - [ ] **Counterparty portal** to review and sign without an account.
 
 ### 🔭 Later
