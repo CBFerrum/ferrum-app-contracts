@@ -1,5 +1,5 @@
 package: contracts
-version: 0.3.0
+version: 0.4.0
 label: Contracts
 description: "Contracts from contract types and approved clauses, their body generated and kept by version, approval by policy, signature through Sign, activation, renewal, notice, obligations and reminders"
 depends: [core, sign]

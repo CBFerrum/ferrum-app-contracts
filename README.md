@@ -148,8 +148,9 @@ governs.
 - **Renewal Notice On.** Worked out for you: the end date less the notice days.
 - **Department and owner.** The creator becomes the owner. The department is read by approval policies that route
   by department.
-- **Terms are kept.** Out of its draft, a contract keeps its party, type, value, term, renewal, clauses and
-  document. They no longer change under an approval.
+- **Terms are kept.** Out of its draft, a contract keeps its party, type, value, term, renewal, notice days,
+  signatories, clauses and document. They no longer change under an approval. To change an approved one, Withdraw
+  Approval (saying why) puts it back in its draft, and it is approved again through Submit It.
 - **Contract Settings.** The approval threshold (default 10,000), who signs for the organisation when a contract
   names no signatories (name and email, required) and the reminder days (default 14, 0 for none).
 
@@ -161,6 +162,8 @@ governs.
 - **Your own policy.** A workspace edits the policy on Contract's Approve It in Customize. Steps can be set by value
   band, by type, by department, in order or together, as N of M, with stand-ins and escalation. While it waits, the
   contract stays as it is.
+- **Policies on other actions.** A workspace may put the same kind of policy on Send for Signature and on Terminate
+  It in Customize: the action then waits for the approvers and runs, as whoever asked, once they approve.
 - **Approvers decide under Approvals.** A rejection sends the contract back to Draft, with the reason, at the next
   upkeep; so does a request its submitter recalls. Who decided, when and what they said is the request's record.
 - **An approval bound to what was approved.** The approval is bound to a digest of the terms, the clauses' wording
@@ -180,8 +183,11 @@ governs.
   with. A contract with no type and no signatories keeps two boxes at fixed places.
 - **Follows Sign.** At the next upkeep, a completed request makes the contract Signed with the sealed PDF; a
   request that is declined, expired or voided returns the contract to Approved and says why.
-- **A page is refused up front.** Where there is no PDF service, a body is kept as a page. Send for Signature
-  then refuses and names `FERRUM_PDF_URL`. The contract stays Approved and no request is made.
+- **A page is refused up front.** A typed contract's body is a PDF only where the server has a PDF service
+  (`FERRUM_PDF_URL`). Without one it is kept as a page, which cannot be sent to Sign: Send for Signature refuses and
+  names `FERRUM_PDF_URL`, the contract stays Approved and no request is made. Record a signed copy instead.
+- **Through the platform's gate.** Contracts makes, places, sends and reads Sign's requests only through Sign's
+  declared operations: each call has a receipt naming Contracts and the person it acts for.
 - **Signed elsewhere.** Record Signed Copy takes the uploaded signed PDF, who signed and when. The contract becomes
   Signed, is marked Signed Elsewhere and keeps its own copy. From a draft (an import), only a Contract Approver or
   Legal can record it.
@@ -255,6 +261,7 @@ flowchart LR
     A["Draft"] -->|"Submit It"| B["In Review"]
     B -->|"Approved by policy"| C["Approved"]
     B -->|"Rejected or recalled"| A
+    C -->|"Withdraw Approval"| A
     C -->|"Send for Signature"| D["Out for Signature"]
     D -->|"Declined or expired"| C
     D -->|"Signed in Sign"| E["Signed"]
@@ -320,7 +327,7 @@ records are optional and appear when the matching app is installed.
 
 | With | How | Needs |
 |---|---|---|
-| **Sign** | Signature requests, order of signing, sealed PDF back on the contract | Sign installed (comes with Contracts); `FERRUM_PDF_URL` for the PDF service |
+| **Sign** | Signature requests, order of signing, sealed PDF back on the contract, through Sign's operations `sign.sign_request.create`, `.update`, `.send` and `.read` (`^0.2`, declared in `uses`) | Sign installed (comes with Contracts); `FERRUM_PDF_URL` for the PDF service |
 | **Parties** (`contracts_parties`) | Customer, Supplier and Contact links on a contract | Parties app |
 | **CRM** (`contracts_crm`) | Opportunity the contract closes | CRM app |
 | **Selling** (`contracts_selling`) | Sales order the contract governs | ERP selling |
@@ -403,6 +410,8 @@ Compared with five contract lifecycle management products: Ironclad, DocuSign CL
 
 ### ✅ Recently shipped
 
+- [x] **0.6.0.** Sign reached through its declared operations; one signed copy however many upkeeps run; notice days
+  and signatories kept with the terms; Withdraw Approval.
 - [x] **0.5.0**: Upkeep runs one workspace at a time, on whichever replica is free.
 - [x] **0.4.3.** What happens today is dated on the workspace's day, not the UTC day.
 - [x] **0.4.2.** Rebuilt on Ferrum-Frontend 06bd1a2.
@@ -504,7 +513,8 @@ Cargo.toml, build.rs          the Rust crate; build.rs embeds packages/ and ui/d
 src/
   lib.rs                      registers the packages, hooks, reports and the upkeep
   contract.rs                 submit, approval, clauses, confidentiality rules
-  sign.rs                     send for signature and follow the Sign request
+  sign.rs                     send for signature and follow the Sign request, through Sign's operations
+  keys.rs                     the app's vault handle, which proves a call of Sign's operations is Contracts'
   term.rs                     activation, renewal, expiry, notice and reminders
   reports.rs                  the four reports
 packages/

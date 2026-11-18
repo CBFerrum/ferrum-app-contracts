@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.6.0
+
+Needs the same platform as 0.5.0 and Sign's package at 0.2. The `contracts` package is 0.4.0. No database or interface
+change; nothing to migrate.
+
+- **Sign through the platform's gate.** Contracts no longer writes Sign's records itself. Its package declares the four
+  Sign operations it uses (`sign.sign_request.create`, `.update`, `.send`, `.read`, `^0.2`), which the install screen
+  lists, and it calls them with its own vault handle: each call has a receipt naming Contracts and the person it acted
+  for. What a person sees is the same: the same request, the same boxes on the last page, the same follow-up. A
+  workspace whose Contracts does not declare them is refused (`forbidden`) and the contract stays Approved. A
+  contract sent back and sent again makes a new request. The server registers it as `hooks.app("contracts", …)`.
+- **One signed copy.** Two upkeeps at once each copied the sealed PDF onto a contract. The upkeep now locks each
+  contract out for signature first: the second waits, then finds it signed and leaves it.
+- **Notice days and signatories are kept.** Out of its draft a contract's notice days and signatories could still be
+  edited, although its body prints them and its signatories were approved. They are kept as its terms are. The
+  approval digest of contracts already approved is unchanged.
+- **Withdraw Approval.** An approved contract goes back to its draft, saying why, bound to no approval; changed, it is
+  approved again through Submit It.
+- **Approvals on any action, proven.** A workspace's policy on Send for Signature or Terminate It (Customize) makes
+  the action wait for its approvers and run once they approve. Both actions now have a contract saying what they do.
+
 ## 0.5.0
 
 Needs Ferrum 0.4.0 (apps' upkeep runs one workspace at a time, on whichever replica is free).
