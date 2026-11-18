@@ -151,7 +151,17 @@
       condition: "doc.status == 'In Review' && doc.submitted_by == user.email && (user.is_admin || 'Contract Manager' in user.roles || 'Legal' in user.roles)"
       condition_message: "a Contract Manager or Legal asks for a contract's approval, by Submit It; asked again, only by whoever submitted it"
       contract: {completion: "The contract is approved, bound to its terms, its clauses' wording and its PDF as they are now"}
-    - {name: send_for_signature, label: Send for Signature, permission: write, condition: "doc.status == 'Approved' && doc.document != null"}
+    - name: withdraw_approval
+      label: Withdraw Approval
+      permission: write
+      condition: "doc.status == 'Approved'"
+      params: [{name: reason, type: text, label: Why, required: true}]
+      contract: {completion: "The contract is back in its draft with the reason given, bound to no approval: its terms, notice days and signatories may change, and it is approved again only through Submit It"}
+    - name: send_for_signature
+      label: Send for Signature
+      permission: write
+      condition: "doc.status == 'Approved' && doc.document != null"
+      contract: {completion: "A Sign request for the contract's PDF is made, its boxes placed on the last page and sent to its signatories in order; the contract is Out for Signature and names the request"}
     - name: record_signed_copy
       label: Record Signed Copy
       permission: write
@@ -161,7 +171,12 @@
         - {name: signed_by, type: text, label: Signed By, required: true, description: "Who signed it, on each side"}
         - {name: signed_on, type: date, label: Signed On, required: true}
     - {name: renew_contract, label: Renew It, permission: write, condition: "(doc.status == 'Active' || doc.status == 'Expired') && doc.renewed_by == null"}
-    - {name: terminate_contract, label: Terminate It, permission: write, condition: "doc.status == 'Signed' || doc.status == 'Active'", params: [{name: reason, type: text, label: Why, required: true}]}
+    - name: terminate_contract
+      label: Terminate It
+      permission: write
+      condition: "doc.status == 'Signed' || doc.status == 'Active'"
+      params: [{name: reason, type: text, label: Why, required: true}]
+      contract: {completion: "The contract is Terminated on the workspace's day with the reason given; it no longer renews, expires or reminds"}
   numbering: {template: "CTR-{YYYY}-{seq:5}"}
   list: {columns: [number, title, counterparty_name, value, ends_on, status], sort: created_at desc}
 

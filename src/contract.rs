@@ -29,6 +29,18 @@ fn terms(doc: &Doc) -> Vec<Option<String>> {
     t
 }
 
+/// What a contract out of its draft keeps: its terms, and its notice days and signatories, which its body prints. Apart
+/// from `terms` so that the digest of a contract approved before them stays the same.
+fn kept(doc: &Doc) -> Vec<Option<String>> {
+    let mut t = terms(doc);
+    t.push(doc.get("notice_days").and_then(Value::as_i64).map(|v| v.to_string()));
+    for r in rows(doc, "signatories") {
+        t.extend(["name", "email", "role"].map(|k| s(&r, k).map(str::to_string)));
+        t.push(r.get("signing_order").and_then(Value::as_i64).map(|v| v.to_string()));
+    }
+    t
+}
+
 /// What an approval is bound to: the contract's terms, each clause's wording as drafted, and its PDF's
 /// stored SHA-256 (FEO-038). The same contract gives the same digest; any change gives another.
 pub(crate) async fn approved_digest(tx: &mut Tx, ctx: &Ctx, doc: &Doc) -> Result<String> {
@@ -259,9 +271,12 @@ impl DocHook for ContractHook {
         }
         if let Some(o) = old
             && !matches!(s(o, "status"), Some("Draft") | None)
-            && (terms(o) != terms(doc) || s(o, "document") != s(doc, "document") || s(o, "kind") != s(doc, "kind"))
+            && (kept(o) != kept(doc) || s(o, "document") != s(doc, "document") || s(o, "kind") != s(doc, "kind"))
         {
-            return Err(Error::invalid("a contract out of its draft keeps its terms"));
+            return Err(Error::invalid(match s(o, "status") {
+                Some("Approved") => "a contract out of its draft keeps its terms: withdraw its approval to change them",
+                _ => "a contract out of its draft keeps its terms",
+            }));
         }
         Ok(())
     }
@@ -301,15 +316,20 @@ impl DocHook for ContractHook {
             }
             // The approval policy is satisfied, or asked nobody: the contract approved, bound to what it was given.
             "approve" => json!({"status": "Approved", "approved_digest": approved_digest(hc.tx, hc.ctx, doc).await?, "decision_note": null}),
+            // Back to its draft, bound to nothing: changed, it is approved again only through Submit It.
+            "withdraw_approval" => {
+                let why = note("reason").ok_or_else(|| Error::field("reason", "a withdrawal says why"))?;
+                json!({"status": "Draft", "approved_digest": null, "decision_note": format!("Approval withdrawn by {}: {why}", hc.ctx.email)})
+            }
             "send_for_signature" => {
                 // What goes for signature is what was approved, wording and PDF (FEO-038); one approved before
                 // approvals were bound has nothing to compare.
                 if let Some(approved) = s(doc, "approved_digest")
                     && approved != approved_digest(hc.tx, hc.ctx, doc).await?
                 {
-                    return Err(Error::invalid("its wording or its PDF is not what was approved: send it back and approve it again"));
+                    return Err(Error::invalid("its wording or its PDF is not what was approved: withdraw its approval and submit it again"));
                 }
-                let request = crate::sign::send(hc.kernel, &system, hc.tx, doc).await?;
+                let request = crate::sign::send(hc.kernel, hc.ctx, &system, hc.tx, doc).await?;
                 json!({"status": "Out for Signature", "sign_request": request.to_string()})
             }
             "record_signed_copy" => {

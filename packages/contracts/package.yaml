@@ -3,6 +3,12 @@ version: 0.3.0
 label: Contracts
 description: "Contracts from contract types and approved clauses, their body generated and kept by version, approval by policy, signature through Sign, activation, renewal, notice, obligations and reminders"
 depends: [core, sign]
+# Sign's operations it calls through the platform's gate (src/sign.rs), at the versions it was built for.
+uses:
+  - {capability: sign.sign_request.create, version: "^0.2"}
+  - {capability: sign.sign_request.update, version: "^0.2"}
+  - {capability: sign.sign_request.send, version: "^0.2"}
+  - {capability: sign.sign_request.read, version: "^0.2"}
 
 modules:
   - name: contracts

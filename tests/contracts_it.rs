@@ -193,10 +193,14 @@ async fn scenario() {
     let sign_packages: Vec<String> = ferrum_app_sign::packages().unwrap().iter().map(|p| p.name().to_string()).collect();
     hooks.app("sign", &sign_packages, ferrum_app_sign::register);
     hooks.own("sign", &sign_packages);
-    ferrum_app_contracts::register(&mut hooks);
+    // As the server registers it: its own vault handle, which proves its calls of Sign's operations are its.
+    let names: Vec<String> = ferrum_app_contracts::packages().unwrap().iter().map(|p| p.name().to_string()).collect();
+    hooks.app("contracts", &names, ferrum_app_contracts::register);
+    hooks.own("contracts", &names);
     let settings = KernelSettings { pdf_url: Some(fake_pdf_renderer().await), ..Default::default() };
-    let k = Kernel::boot(db, catalog, hooks, settings, None).await.expect("boot");
-    k.set_file_store(Arc::new(MemFiles::default()));
+    let k = Kernel::boot(db, catalog, hooks, settings.clone(), None).await.expect("boot");
+    let files = Arc::new(MemFiles::default());
+    k.set_file_store(files.clone());
     ferrum_domain::maintenance(&k).await.expect("partitions");
     let tenant = k
         .create_tenant(NewTenant {
@@ -251,6 +255,23 @@ async fn scenario() {
     assert_eq!(t.status(small).await, "Approved", "below the threshold");
     refused(t.set(&cm, "Contract", small, json!({"value": "4000"})).await, "invalid", "keeps its terms");
     refused(t.set(&cm, "Contract", small, json!({"clauses": [{"clause": pay.to_string()}, {"clause": liab.to_string()}]})).await, "invalid", "keeps its terms");
+    // Its notice days and its signatories are printed in its body: kept as its terms are, until its approval is withdrawn.
+    refused(t.set(&cm, "Contract", small, json!({"notice_days": 5})).await, "invalid", "keeps its terms");
+    let signer = json!({"signatories": [{"name": "Gina Globex", "email": "gina@globex.test", "role": "Counterparty", "signing_order": 1}]});
+    refused(t.set(&cm, "Contract", small, signer.clone()).await, "invalid", "keeps its terms");
+    let nobody = t.user("nobody@northwind.test", &[]).await;
+    refused(t.act(&nobody, small, "withdraw_approval", json!({"reason": "Wrong signatory"})).await, "forbidden", "");
+    refused(t.act(&cm, small, "withdraw_approval", Value::Null).await, "invalid", "says why");
+    t.act(&cm, small, "withdraw_approval", json!({"reason": "Wrong signatory"})).await.expect("withdrawn");
+    let withdrawn = t.get("Contract", small).await;
+    assert_eq!(
+        (withdrawn["status"].as_str(), withdrawn["approved_digest"].as_str(), withdrawn["decision_note"].as_str()),
+        (Some("Draft"), None, Some("Approval withdrawn by cm@northwind.test: Wrong signatory"))
+    );
+    refused(t.act(&cm, small, "withdraw_approval", json!({"reason": "Again"})).await, "invalid", "is not available");
+    t.set(&cm, "Contract", small, signer).await.expect("a draft's signatories change");
+    t.act(&cm, small, "submit_contract", Value::Null).await.unwrap();
+    assert_eq!(t.status(small).await, "Approved", "approved again, through Submit It");
     t.set(&ca, "Clause", pay, json!({"text": "Invoices are paid within 45 days."})).await.unwrap();
     t.set(&cm, "Contract", small, json!({"title": "Support plan 2026"})).await.expect("its title is not its terms");
     assert_eq!(t.get("Contract", small).await["clauses"][0]["text"], "Invoices are paid within 30 days.", "the wording as it was drafted");
@@ -373,6 +394,19 @@ async fn scenario() {
         request["signers"].as_array().unwrap().iter().map(|s| (s["email"].as_str().unwrap().to_string(), s["signing_order"].as_i64().unwrap())).collect();
     assert_eq!(signers, [("legal@globex.test".to_string(), 1), ("nora@northwind.test".to_string(), 2)], "the counterparty first, then the organisation");
     assert!(request["fields"].as_array().unwrap().iter().all(|f| f["page"] == 3), "signatures on the last page");
+    // Made through Sign's operation at the platform's gate: its receipt names Contracts, and the person it acted for.
+    let receipt: Option<(Option<String>, Option<Uuid>)> = {
+        let mut tx = k.db.tenant_tx(tenant).await.unwrap();
+        let r = sqlx::query_as("select caller, actor from logic_effect where tenant_id = $1 and capability = 'sign.sign_request.create' and effect_key = $2")
+            .bind(tenant)
+            .bind(format!("contracts:sign:{signed_one}:first"))
+            .fetch_optional(&mut *tx)
+            .await
+            .unwrap();
+        tx.commit().await.unwrap();
+        r
+    };
+    assert_eq!(receipt, Some((Some("contracts".to_string()), Some(cm.user))), "a send is recorded as Contracts' call");
     ferrum_app_contracts::maintenance_on(&k, tenant, today).await.unwrap();
     assert_eq!(t.status(signed_one).await, "Out for Signature", "waiting while Sign waits");
     t.sign_ends(uid(&c["sign_request"]), "Completed").await;
@@ -404,6 +438,13 @@ async fn scenario() {
     ferrum_app_contracts::maintenance_on(&k, tenant, today).await.unwrap();
     let back = t.get("Contract", nda).await;
     assert_eq!((back["status"].as_str(), back["decision_note"].as_str()), (Some("Approved"), Some("The signature request was declined: send it again")));
+    // Sent again, it is a new request, which the contract names.
+    let first = uid(&back["sign_request"]);
+    t.act(&cm, nda, "send_for_signature", Value::Null).await.expect("sent again");
+    let again = uid(&t.get("Contract", nda).await["sign_request"]);
+    assert_ne!(again, first, "a second request");
+    assert_eq!(t.get("SignRequest", again).await["status"], "Sent");
+    assert_eq!(t.get("SignRequest", first).await["status"], "Declined", "the first one stays as it ended");
 
     // ───────────── the term ─────────────
     let future = uid(&t
@@ -421,7 +462,9 @@ async fn scenario() {
     assert_eq!(t.status(future).await, "Signed", "signed, not yet started");
     ferrum_app_contracts::maintenance_on(&k, tenant, today + Duration::days(30)).await.unwrap();
     assert_eq!(t.status(future).await, "Active");
-    // Renewing by itself: notice falls due before the end, then a new term.
+    // Renewing by itself: notice falls due before the end, then a new term. Its notice days are its terms: a person's
+    // change is refused, and the 30 days it was signed with stand (notice due 25 days before its end, below).
+    refused(t.set(&cm, "Contract", signed_one, json!({"notice_days": 5})).await, "invalid", "keeps its terms");
     let mut tx = k.db.tenant_tx(tenant).await.unwrap();
     sqlx::query("update e_contract set auto_renew = true, renewal_months = 12, notice_days = 30 where tenant_id = $1 and id = $2")
         .bind(tenant)
@@ -659,6 +702,43 @@ async fn scenario() {
     refused(t.k.insert(&ca, "Contract", obj(contract("Mine", "1", start.clone(), end.clone(), vec![]))).await, "forbidden", "");
     refused(t.k.insert(&ca, "Obligation", obj(ob("Mine", today.to_string()))).await, "forbidden", "");
 
+    // ───────────── two upkeeps at once keep one signed copy ─────────────
+    let mut out = vec![];
+    for n in 0..5 {
+        let c = uid(&t
+            .insert(
+                &cm,
+                "Contract",
+                json!({"title": format!("Batch {n}"), "counterparty_name": "Globex", "counterparty_email": "legal@globex.test", "document": path,
+                       "starts_on": start, "ends_on": end}),
+            )
+            .await["id"]);
+        t.act(&cm, c, "submit_contract", Value::Null).await.unwrap();
+        t.act(&cm, c, "send_for_signature", Value::Null).await.unwrap();
+        let request = uid(&t.get("Contract", c).await["sign_request"]);
+        t.sign_ends(request, "Completed").await;
+        out.push((c, file(&t.get("SignRequest", request).await["sealed_document"])));
+    }
+    let (a, b) = tokio::join!(ferrum_app_contracts::maintenance_on(&k, tenant, today), ferrum_app_contracts::maintenance_on(&k, tenant, today));
+    for (c, sealed) in out {
+        let mut tx = k.db.tenant_tx(tenant).await.unwrap();
+        let copies: i64 = sqlx::query_scalar(
+            "select count(*) from file_object f where f.tenant_id = $1 and f.entity = 'Contract' and f.record_id = $2 \
+             and f.sha256 = (select s.sha256 from file_object s where s.tenant_id = $1 and s.id = $3)",
+        )
+        .bind(tenant)
+        .bind(c)
+        .bind(sealed)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(copies, 1, "one copy of the sealed PDF on each contract");
+        assert_eq!(t.status(c).await, "Active");
+    }
+    a.unwrap();
+    b.unwrap();
+
     // ───────────── the workspace's day, not UTC's ─────────────
     // No clock can be set: as the platform's own suites do, the workspace moves to a zone whose day is not UTC's now
     // (UTC-11 before 10:00 UTC, UTC+14 after), and what the app dates or decides "today" is held to the workspace's day.
@@ -695,4 +775,103 @@ async fn scenario() {
         (Some(true), Some(false)),
         "overdue as of the workspace's day"
     );
+
+    // ───────────── a workspace's own policy on Terminate It and on Send for Signature (CTR-15) ─────────────
+    let policy = |action: &str, approval: Value| -> ferrum_kernel::customize::NewCustomization {
+        serde_json::from_value(json!({"entity": "Contract", "op": {"op": "set_approval", "on": {"action": action}, "approval": approval}})).unwrap()
+    };
+    let legal_step = json!({"steps": [{"label": "Legal", "approvers": {"role": "Legal"}}]});
+    t.k.batch_customizations(&t.admin, vec![policy("terminate_contract", legal_step.clone())], false)
+        .await
+        .map_err(|(_, e)| e)
+        .expect("a policy on Terminate It");
+    // A person's context carries the workspace's schema as it was when loaded: loaded again, it has the policy.
+    let fresh = |c: &Ctx| {
+        let (k, user) = (k.clone(), c.user);
+        async move { k.load_ctx(tenant, user, None, "it".into()).await.expect("ctx") }
+    };
+    let (cm, legal) = (fresh(&cm).await, fresh(&legal).await);
+    // A workspace's policy on Terminate It asks first.
+    assert_eq!(t.status(late).await, "Active");
+    let asked = t.act(&cm, late, "terminate_contract", json!({"reason": "Supplier exit"})).await.unwrap();
+    assert!(asked["_approval"].is_object(), "it waits for Legal: {asked}");
+    assert_eq!(t.status(late).await, "Active", "nothing done while it waits");
+    t.k.decide_approval(&legal, "Contract", late, true, None).await.expect("Legal approves");
+    let ended = t.get("Contract", late).await;
+    assert_eq!((ended["status"].as_str(), ended["termination_reason"].as_str()), (Some("Terminated"), Some("Supplier exit")), "with the reason asked");
+    // A workspace's policy on Send for Signature sends once it is approved, once.
+    t.k.batch_customizations(&t.admin, vec![policy("send_for_signature", legal_step)], false)
+        .await
+        .map_err(|(_, e)| e)
+        .expect("a policy on Send for Signature");
+    let (cm, legal) = (fresh(&cm).await, fresh(&legal).await);
+    let held = uid(&t
+        .insert(
+            &cm,
+            "Contract",
+            json!({"title": "Held for Legal", "counterparty_name": "Globex", "counterparty_email": "legal@globex.test", "document": path,
+                   "starts_on": day.to_string(), "ends_on": (day + Duration::days(365)).to_string()}),
+        )
+        .await["id"]);
+    t.act(&cm, held, "submit_contract", Value::Null).await.unwrap();
+    let asked = t.act(&cm, held, "send_for_signature", Value::Null).await.unwrap();
+    assert!(asked["_approval"].is_object(), "it waits for Legal: {asked}");
+    let requests = |contract: Uuid| {
+        let k = k.clone();
+        async move {
+            let mut tx = k.db.tenant_tx(tenant).await.unwrap();
+            let n: i64 = sqlx::query_scalar("select count(*) from e_sign_request where tenant_id = $1 and reference_id = $2")
+                .bind(tenant)
+                .bind(contract.to_string())
+                .fetch_one(&mut *tx)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+            n
+        }
+    };
+    assert_eq!((t.status(held).await, requests(held).await), ("Approved".to_string(), 0), "nothing sent while it waits");
+    t.k.decide_approval(&legal, "Contract", held, true, None).await.expect("Legal approves");
+    assert_eq!((t.status(held).await, requests(held).await), ("Out for Signature".to_string(), 1), "sent once it is approved, once");
+    t.k.batch_customizations(&t.admin, vec![policy("send_for_signature", Value::Null), policy("terminate_contract", Value::Null)], false)
+        .await
+        .map_err(|(_, e)| e)
+        .expect("the policies taken away");
+    let cm = fresh(&cm).await;
+
+    // ───────────── a workspace whose Contracts does not declare Sign's operations ─────────────
+    // The same database, served by a build whose Contracts package uses nothing: the gate refuses its call.
+    let mut packages = ferrum_domain::packages().expect("platform packages");
+    packages.extend(ferrum_app_sign::packages().expect("Sign's packages"));
+    let have: Vec<String> = packages.iter().map(|p| p.name().to_string()).collect();
+    packages.extend(
+        ferrum_app_contracts::packages().unwrap().into_iter().filter(|p| p.manifest.depends.iter().all(|d| have.contains(d) || d == "contracts")).map(
+            |mut p| {
+                p.manifest.uses.clear();
+                p
+            },
+        ),
+    );
+    let mut hooks = HookRegistry::default();
+    ferrum_domain::register(&mut hooks);
+    hooks.app("sign", &sign_packages, ferrum_app_sign::register);
+    hooks.own("sign", &sign_packages);
+    hooks.app("contracts", &names, ferrum_app_contracts::register);
+    hooks.own("contracts", &names);
+    let k2 = Kernel::boot(k.db.clone(), Catalog::from_packages(packages).expect("catalog"), hooks, settings, None).await.expect("boot without the uses");
+    k2.set_file_store(files);
+    let unused = uid(&t
+        .insert(
+            &cm,
+            "Contract",
+            json!({"title": "No use declared", "counterparty_name": "Globex", "counterparty_email": "legal@globex.test", "document": path,
+                   "starts_on": day.to_string(), "ends_on": (day + Duration::days(365)).to_string()}),
+        )
+        .await["id"]);
+    t.act(&cm, unused, "submit_contract", Value::Null).await.unwrap();
+    let cm2k = k2.load_ctx(tenant, cm.user, None, "it".into()).await.expect("ctx");
+    refused(k2.run_action(&cm2k, "Contract", unused, "send_for_signature", Value::Null).await, "forbidden", "does not use sign.sign_request.create");
+    let after = t.get("Contract", unused).await;
+    assert!(after["status"] == "Approved" && after["sign_request"].is_null(), "it stays approved, no request");
+    assert_eq!(requests(unused).await, 0, "nothing left of the refused call");
 }
