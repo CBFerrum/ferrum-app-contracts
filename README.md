@@ -210,6 +210,20 @@ governs.
 - **The sealed copy.** A signed contract keeps its own copy of the sealed PDF. Whoever may read the contract may
   open it.
 
+### 📥 Requests from a form
+
+- **Intake with no code.** Make an Internal form in Forms with questions for the title, the counterparty, the start
+  and end dates, an optional value, a note and a required email question. Set its Target Entity to `Contract` and map
+  them to `title`, `counterparty_name`, `starts_on`, `ends_on`, `value`, `request_note` and `requested_by`. Without the
+  Forms app there is no intake. An Internal form keeps outsiders from making drafts.
+- **A request is a draft.** It says who asked (Requested By) and what for (Request Note), and has no owner. Legal and
+  the Contract Managers are told as it arrives (Legal only, for a confidential one), and see it in the Requests queue
+  on the Contracts page, apart from the drafts in the works.
+- **Take It.** Whoever will draft it takes it and becomes its owner; one person only. Whoever asked is told.
+- **Withdraw It.** A draft or an approved contract nobody wants is withdrawn, saying why, and stays Withdrawn: it is
+  never submitted, signed, renewed or reminded. Whoever asked is told. One in review is recalled first.
+- **Who asked is personal data.** An erasure blanks Requested By and Request Note; the contract remains.
+
 ### 🔄 Term, renewal and ending
 
 - **Active from its start.** A signed contract becomes Active on its start date.
@@ -314,7 +328,7 @@ records are optional and appear when the matching app is installed.
 
 | Entity | What it is | Key fields or states |
 |---|---|---|
-| **Contract** | An agreement from draft to signature and through its term | Number, title, type, category, counterparty, owner, department, confidential, value, start, end, auto-renew, notice days, status (Draft, In Review, Approved, Out for Signature, Signed, Active, Expired, Terminated) |
+| **Contract** | An agreement from draft to signature and through its term | Number, title, type, category, counterparty, owner, department, confidential, value, start, end, auto-renew, notice days, requested by, request note, status (Draft, In Review, Approved, Out for Signature, Signed, Active, Expired, Terminated, Withdrawn) |
 | **Contract Type** | A kind of contract | Name, template, renewal (New Version or New Contract), clauses, disabled |
 | **Clause** | Approved wording | Name, category, text with merge fields, fallback, approved |
 | **Obligation** | A commitment or milestone | Contract, description, kind, party, owner, due on, status, overdue |
@@ -369,7 +383,7 @@ Compared with five contract lifecycle management products: Ironclad, DocuSign CL
 | Version history of the body | 🟡¹ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Compare two versions | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Edit and redline with the counterparty | ❌ | ✅ | 🟡² | 🟡² | 🟡² | ✅ |
-| Business intake request triaged by legal | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Business intake request triaged by legal | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Approval routing by value, type or department | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Approver reminders, stand-ins and escalation | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | E-signature in the same product | 🟡³ | ✅ | ✅ | 🟡⁴ | 🟡⁴ | ✅ |
@@ -414,7 +428,6 @@ Compared with five contract lifecycle management products: Ironclad, DocuSign CL
 
 - ✏️ **Redlining and negotiation** with the counterparty, and a counterparty portal.
 - 🤖 **AI** that reads a contract, fills its fields and checks it against a playbook.
-- 📥 **Intake**: business request forms.
 - 🔎 **Full-text search** inside uploaded PDFs.
 - 🧬 **Contract hierarchies**: amendments, master agreements and orders beneath them.
 - 📈 **Dashboards** and analytics, and years of integrations with other vendors' systems.
@@ -426,6 +439,7 @@ Compared with five contract lifecycle management products: Ironclad, DocuSign CL
 
 ### ✅ Recently shipped
 
+- [x] **0.9.0.** Requests from a form: who asked, the Requests queue, Take It, Withdraw It, and the requester told.
 - [x] **0.8.0.** Clause versions, own wording on a contract, a type's playbook with a deviation score, and Legal's
   step in the approval policy for a contract that departs from it.
 - [x] **0.7.0.** Every version keeps its words, an attached PDF is a version, and Compare Versions gives a redline.
@@ -451,7 +465,6 @@ Compared with five contract lifecycle management products: Ironclad, DocuSign CL
 - [ ] **Redlining.** Edit a body with tracked changes and let the counterparty respond, because most contracts are negotiated.
 - [ ] **Amendments and master agreements.** A parent link with orders and statements of work beneath it.
 - [ ] **Recurring obligations** with a linked clause and an evidence upload.
-- [ ] **Business intake.** A request from outside legal that legal triages into a contract.
 - [ ] **Counterparty portal** to review and sign without an account.
 
 ### 🔭 Later

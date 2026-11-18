@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.9.0
+
+Needs the same platform as 0.8.0. The `contracts` package is 0.7.0: Contract gains Requested By, Request Note,
+Withdrawn On, Withdrawal Reason and the status Withdrawn (appended; existing values keep their meaning); three
+message templates. `ui/dist` rebuilt with Ferrum-Frontend `5e2661f`.
+
+- **Requests from a form.** A form in the Forms app mapped to Contract makes a draft as the system. Such a draft no
+  longer gets the system's address as its owner: it says who asked and waits. Legal and the Contract Managers are
+  told as it arrives (`contracts.request_received`; Legal only for a confidential one) and see it under Requests on
+  the Contracts page, apart from the drafts in the works.
+- **Take It** (`take_request`): the presser owns it; the requester is told (`contracts.request_taken`).
+- **Withdraw It** (`withdraw_contract`): a Draft or Approved contract ends as Withdrawn with the reason and the day;
+  the requester is told (`contracts.request_withdrawn`). Nothing leads out of Withdrawn and the upkeep leaves it.
+- Requested By and Request Note are erased with the requester's personal data.
+- The interface's route table is in `ui/src/routes.tsx`, and a test mounts it.
+
 ## 0.8.0
 
 Needs the same platform as 0.7.0. The `contracts` package is 0.6.0: Clause gains `wording_version` and a Versions
