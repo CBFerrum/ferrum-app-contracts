@@ -122,14 +122,32 @@ async fn template_of(tx: &mut Tx, ctx: &Ctx, doc: &Doc) -> Result<Option<String>
 }
 
 /// Makes the contract's body from its type's template and keeps it as its next version: the file attached to the
-/// contract, never replaced (each version stays), its SHA-256, who and when, and its words for search. The values
-/// to write on the contract, or none when it has no type with a template.
-pub(crate) async fn freeze(k: &Kernel, tx: &mut Tx, ctx: &Ctx, doc: &Doc, by: &str, reason: &str) -> Result<Option<Doc>> {
-    let Some(template) = template_of(tx, ctx, doc).await? else { return Ok(None) };
+/// contract, never replaced (each version stays), its SHA-256, who and when, and its words. The words are taken only when
+/// `stored` (the record in the database is what `doc` holds): the page is rendered from the stored record, so at a
+/// renewal, whose new end is not stored yet, they would be the old body's (a renewal's version keeps no words). The
+/// values to write on the contract, or none. A contract with no template whose attached PDF is not its last version's
+/// gets a version of that PDF, with no words (they are inside the PDF).
+pub(crate) async fn freeze(k: &Kernel, tx: &mut Tx, ctx: &Ctx, doc: &Doc, by: &str, reason: &str, stored: bool) -> Result<Option<Doc>> {
     let contract = id(doc, "id").ok_or_else(|| Error::internal("a contract without an id"))?;
-    const KEPT: [&str; 7] = ["id", "version_no", "file", "sha256", "made_by", "made_at", "reason"];
+    const KEPT: [&str; 8] = ["id", "version_no", "file", "sha256", "made_by", "made_at", "reason", "text"];
     let mut versions: Vec<Doc> = rows(doc, "versions").into_iter().map(|r| r.into_iter().filter(|(k, _)| KEPT.contains(&k.as_str())).collect()).collect();
     let version = versions.iter().filter_map(|v| v.get("version_no").and_then(Value::as_i64)).max().unwrap_or(0) + 1;
+    let at = Utc::now().to_rfc3339();
+    let Some(template) = template_of(tx, ctx, doc).await? else {
+        let Some(file) = file_of(doc, "document") else { return Ok(None) };
+        let sha: Option<String> = sqlx::query_scalar("select sha256 from file_object where tenant_id = $1 and id = $2")
+            .bind(ctx.tenant)
+            .bind(file)
+            .fetch_optional(&mut **tx)
+            .await?
+            .flatten();
+        if sha.is_some() && versions.last().and_then(|v| s(v, "sha256")) == sha.as_deref() {
+            return Ok(None);
+        }
+        versions.push(obj(json!({"version_no": version, "file": s(doc, "document"), "sha256": sha, "made_by": by, "made_at": at, "reason": reason})));
+        k.set_child_rows_tx(ctx, tx, "Contract", "versions", contract, versions).await?;
+        return Ok(None);
+    };
     let title = s(doc, "title").unwrap_or("Contract");
     let g = ferrum_kernel::documents::Generate {
         template: template.clone(),
@@ -140,13 +158,92 @@ pub(crate) async fn freeze(k: &Kernel, tx: &mut Tx, ctx: &Ctx, doc: &Doc, by: &s
         values: Default::default(),
     };
     let made = ferrum_kernel::documents::generate(k, tx, ctx, &g).await?;
-    // The words of the body for search: the page as HTML, whether the file kept is a PDF or the page itself.
-    let words = k.render_document(ctx, &template, contract, None, false).await.map(|page| text_of(&String::from_utf8_lossy(&page.bytes))).unwrap_or_default();
-    versions.push(obj(
-        json!({"version_no": version, "file": made.url, "sha256": made.sha256, "made_by": by, "made_at": Utc::now().to_rfc3339(), "reason": reason}),
-    ));
+    let mut row = json!({"version_no": version, "file": made.url, "sha256": made.sha256, "made_by": by, "made_at": at, "reason": reason});
+    let mut values = json!({"document": made.url, "document_sha256": made.sha256});
+    if stored {
+        // The words of the body: the page as HTML, whether the file kept is a PDF or the page itself.
+        let words =
+            k.render_document(ctx, &template, contract, None, false).await.map(|page| text_of(&String::from_utf8_lossy(&page.bytes))).unwrap_or_default();
+        row["text"] = json!(words);
+        values["body_text"] = json!(words);
+    }
+    versions.push(obj(row));
     k.set_child_rows_tx(ctx, tx, "Contract", "versions", contract, versions).await?;
-    Ok(Some(obj(json!({"document": made.url, "document_sha256": made.sha256, "body_text": words}))))
+    Ok(Some(obj(values)))
+}
+
+/// One change between two versions' words: `equal`, `delete` or `insert`, with its words.
+pub(crate) type Change = (&'static str, String);
+
+/// What changed from `a` to `b`, word by word, runs of one kind merged. A diff that takes longer than two seconds
+/// stops there and gives what it found as coarser changes.
+pub(crate) fn changes(a: &str, b: &str) -> Vec<Change> {
+    let diff = similar::TextDiff::configure().timeout(std::time::Duration::from_secs(2)).diff_words(a, b);
+    let mut out: Vec<Change> = vec![];
+    for change in diff.iter_all_changes() {
+        let op = match change.tag() {
+            similar::ChangeTag::Equal => "equal",
+            similar::ChangeTag::Delete => "delete",
+            similar::ChangeTag::Insert => "insert",
+        };
+        match out.last_mut() {
+            Some((last, text)) if *last == op => text.push_str(change.value()),
+            _ => out.push((op, change.value().to_string())),
+        }
+    }
+    out
+}
+
+/// Every character that came from the contract, safe in a page.
+fn esc(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#39;")
+}
+
+/// The redline of `changes` between versions `from` and `to`: a page with no words of its own, what was removed struck
+/// through, what was added underlined.
+pub(crate) fn redline(title: &str, number: &str, from: i64, to: i64, changes: &[Change]) -> String {
+    let mut out = format!(
+        "<!doctype html><meta charset=utf-8><title>{} v{from} – v{to}</title><h1>{}</h1><p>v{from} → v{to}</p><p style=\"white-space:pre-wrap\">",
+        esc(number),
+        esc(title)
+    );
+    for (op, text) in changes {
+        match *op {
+            "delete" => out.push_str(&format!("<del>{}</del>", esc(text))),
+            "insert" => out.push_str(&format!("<ins>{}</ins>", esc(text))),
+            _ => out.push_str(&esc(text)),
+        }
+    }
+    out.push_str("</p>");
+    out
+}
+
+/// Compare Versions: the words removed and added between versions `from` and `to`, and the redline as a file.
+fn compare(doc: &Doc, params: &Value) -> Result<Value> {
+    let versions = rows(doc, "versions");
+    let pick = |field: &str| -> Result<(i64, Option<String>)> {
+        let n = params.get(field).and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())));
+        let found = n.and_then(|n| versions.iter().find(|v| v.get("version_no").and_then(Value::as_i64) == Some(n)));
+        match (n, found) {
+            (Some(n), Some(v)) => Ok((n, s(v, "text").filter(|t| !t.is_empty()).map(str::to_string))),
+            _ => Err(Error::field(field, "is one of this contract's versions")),
+        }
+    };
+    let ((from, a), (to, b)) = (pick("from")?, pick("to")?);
+    if from == to {
+        return Err(Error::field("to", "is one of this contract's versions, another than From Version"));
+    }
+    let words =
+        |n: i64, t: Option<String>| t.ok_or_else(|| Error::invalid(format!("version {n} has no words kept: its body was an attached PDF or a renewal")));
+    let (a, b) = (words(from, a)?, words(to, b)?);
+    let changes = changes(&a, &b);
+    let count = |op: &str| changes.iter().filter(|(o, _)| *o == op).map(|(_, t)| t.split_whitespace().count()).sum::<usize>();
+    let number = s(doc, "number").unwrap_or_default();
+    Ok(json!({
+        "from": from, "to": to, "removed": count("delete"), "added": count("insert"),
+        "changes": changes.iter().map(|(op, text)| json!({"op": op, "text": text})).collect::<Vec<_>>(),
+        "file": {"name": format!("{number} v{from}-v{to}.html"), "type": "text/html", "content": redline(s(doc, "title").unwrap_or_default(), number, from, to, &changes)},
+    }))
 }
 
 /// The clauses its type makes mandatory that it does not include, neither the clause nor its fallback.
@@ -295,7 +392,7 @@ impl DocHook for ContractHook {
                 let mut values = Doc::new();
                 let first = rows(doc, "versions").is_empty();
                 let reason = if first { "Submitted" } else { "Submitted again" };
-                if let Some(body) = freeze(hc.kernel, hc.tx, &system, doc, &hc.ctx.email, reason).await? {
+                if let Some(body) = freeze(hc.kernel, hc.tx, &system, doc, &hc.ctx.email, reason, true).await? {
                     values.extend(body);
                 }
                 values.insert("status".into(), json!("In Review"));
@@ -351,6 +448,7 @@ impl DocHook for ContractHook {
                        "signed_elsewhere_by": by, "decision_note": format!("Signed elsewhere, recorded by {}", hc.ctx.email)})
             }
             "renew_contract" => return crate::term::renew(hc, doc).await.map(Some),
+            "compare_versions" => return compare(doc, params).map(Some),
             "terminate_contract" => {
                 let why = note("reason").ok_or_else(|| Error::field("reason", "a termination says why"))?;
                 json!({"status": "Terminated", "terminated_on": hc.ctx.today().to_string(), "termination_reason": why, "notice_due": false})
@@ -394,6 +492,20 @@ mod tests {
         assert_eq!(fill("Paid by {{ doc.counterparty_name }} ({{doc.value}}).", &doc), "Paid by Globex (5000).");
         assert_eq!(fill("{{ doc.notice_days }} days, {{ other }} and {{ doc.x-y }}", &doc), " days, {{ other }} and {{ doc.x-y }}");
         assert_eq!(fill("unclosed {{ doc.value", &doc), "unclosed {{ doc.value");
+    }
+
+    #[test]
+    fn changes_merge_runs_of_one_kind() {
+        let c = changes("paid within 30 days net", "paid within 45 days net");
+        let want: Vec<Change> = vec![("equal", "paid within ".into()), ("delete", "30".into()), ("insert", "45".into()), ("equal", " days net".into())];
+        assert_eq!(c, want);
+    }
+
+    #[test]
+    fn the_redline_escapes_what_the_contract_says() {
+        let page = redline("A <b>", "CTR-1", 1, 2, &[("equal", "x & ".into()), ("delete", "<script>".into()), ("insert", "'\"".into())]);
+        assert!(!page.contains("<script") && !page.contains("<b>"), "{page}");
+        assert!(page.contains("<del>&lt;script&gt;</del>") && page.contains("<ins>&#39;&quot;</ins>") && page.contains("x &amp; "), "{page}");
     }
 
     #[test]

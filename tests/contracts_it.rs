@@ -380,6 +380,46 @@ async fn scenario() {
     attach(other["url"].as_str().unwrap().to_string()).await;
     refused(t.act(&cm, bound, "send_for_signature", Value::Null).await, "invalid", "not what was approved");
     attach(path.clone()).await;
+    // An attached PDF is a version at each submit: its file and SHA-256, no words (they are inside the PDF).
+    let sha_of = |url: &Value| {
+        let (k, id) = (k.clone(), uid(&json!(url.as_str().unwrap().rsplit('/').next().unwrap())));
+        async move {
+            let mut tx = k.db.tenant_tx(tenant).await.unwrap();
+            let sha: String =
+                sqlx::query_scalar("select sha256 from file_object where tenant_id = $1 and id = $2").bind(tenant).bind(id).fetch_one(&mut *tx).await.unwrap();
+            tx.commit().await.unwrap();
+            sha
+        }
+    };
+    let attached = uid(&t
+        .insert(
+            &cm,
+            "Contract",
+            json!({"title": "Attached PDF", "counterparty_name": "Globex", "counterparty_email": "legal@globex.test", "starts_on": start, "ends_on": end,
+                   "document": path}),
+        )
+        .await["id"]);
+    t.act(&cm, attached, "submit_contract", Value::Null).await.unwrap();
+    let versions = t.get("Contract", attached).await["versions"].as_array().unwrap().clone();
+    assert_eq!(versions.len(), 1, "an attached PDF is a version: {versions:?}");
+    assert_eq!((versions[0]["file"].as_str(), versions[0]["sha256"].as_str()), (Some(path.as_str()), Some(sha_of(&json!(path)).await.as_str())));
+    assert!(versions[0]["text"].is_null(), "no words of a PDF");
+    // The same PDF submitted again is not a new version; another PDF is.
+    let resubmit = |c: Uuid, reason: &'static str| {
+        let (k, cm) = (k.clone(), cm.clone());
+        async move {
+            k.run_action(&cm, "Contract", c, "withdraw_approval", json!({"reason": reason})).await.expect("withdrawn");
+            k.run_action(&cm, "Contract", c, "submit_contract", Value::Null).await.expect("submitted again");
+        }
+    };
+    resubmit(attached, "Checked again").await;
+    assert_eq!(t.get("Contract", attached).await["versions"].as_array().unwrap().len(), 1, "the same PDF is not a new version");
+    t.act(&cm, attached, "withdraw_approval", json!({"reason": "Another PDF"})).await.unwrap();
+    t.set(&cm, "Contract", attached, json!({"document": other["url"]})).await.expect("a draft's PDF changes");
+    t.act(&cm, attached, "submit_contract", Value::Null).await.unwrap();
+    let versions = t.get("Contract", attached).await["versions"].as_array().unwrap().clone();
+    assert_eq!((versions.len(), versions[1]["file"].clone()), (2, other["url"].clone()), "another PDF, another version");
+    refused(t.act(&cm, attached, "compare_versions", json!({"from": 1, "to": 2})).await, "invalid", "no words kept");
     t.act(&cm, signed_one, "send_for_signature", Value::Null).await.expect("sent");
     let c = t.get("Contract", signed_one).await;
     assert_eq!(c["status"], "Out for Signature");
@@ -534,6 +574,7 @@ async fn scenario() {
     let frozen = t.get("Contract", typed_id).await;
     assert_eq!(frozen["status"], "Approved", "below the threshold, at once");
     let v1 = frozen["versions"].as_array().unwrap().clone();
+    assert!(v1[0]["text"].as_str().is_some_and(|w| w.contains("Notices to Globex go to legal@globex.test.")), "a version keeps its words: {:?}", v1[0]);
     assert_eq!((v1.len(), v1[0]["version_no"].as_i64(), v1[0]["made_by"].as_str()), (1, Some(1), Some("cm@northwind.test")));
     assert_eq!(frozen["document"], v1[0]["file"], "the body frozen is what goes for signature");
     let stored = k.read_file(&t.admin, uid(&json!(frozen["document"].as_str().unwrap().rsplit('/').next().unwrap()))).await.unwrap();
@@ -553,6 +594,47 @@ async fn scenario() {
     // A clause changed in the library does not change a frozen contract.
     t.set(&ca, "Clause", merged, json!({"text": "Notices go anywhere."})).await.unwrap();
     assert_eq!(t.get("Contract", typed_id).await["clauses"][0]["text"], "Notices to Globex go to legal@globex.test.");
+
+    // ───────────── versions keep their words, and compare (CTR-02, CTR-03) ─────────────
+    t.set(&ca, "Clause", pay, json!({"text": "Invoices are paid within 30 days."})).await.unwrap();
+    let revised = uid(&t
+        .insert(
+            &cm,
+            "Contract",
+            json!({"title": "Revised terms", "kind": kind.to_string(), "counterparty_name": "Globex", "counterparty_email": "legal@globex.test",
+                   "value": "5000", "starts_on": start, "ends_on": end, "confidential": true,
+                   "clauses": [{"clause": pay.to_string()}, {"clause": short.to_string()}]}),
+        )
+        .await["id"]);
+    t.act(&cm, revised, "submit_contract", Value::Null).await.unwrap();
+    refused(t.act(&cm, revised, "compare_versions", json!({"from": 1, "to": 2})).await, "invalid", "is not available");
+    t.act(&cm, revised, "withdraw_approval", json!({"reason": "New payment terms"})).await.unwrap();
+    t.set(&ca, "Clause", pay, json!({"text": "Invoices are paid within 45 days."})).await.unwrap();
+    let scripted =
+        uid(&t.insert(&cm, "Clause", json!({"clause_name": "Scripted", "category": "Other", "text": "<script>alert(1)</script> applies."})).await["id"]);
+    t.set(&ca, "Clause", scripted, json!({"approved": true})).await.unwrap();
+    t.set(&cm, "Contract", revised, json!({"clauses": [{"clause": pay.to_string()}, {"clause": short.to_string()}, {"clause": scripted.to_string()}]}))
+        .await
+        .expect("a draft takes the library's wording");
+    t.act(&cm, revised, "submit_contract", Value::Null).await.unwrap();
+    let r = t.get("Contract", revised).await;
+    let texts: Vec<String> = r["versions"].as_array().unwrap().iter().map(|v| v["text"].as_str().unwrap_or_default().to_string()).collect();
+    assert_eq!(texts.len(), 2);
+    assert!(texts[0].contains("within 30 days") && texts[1].contains("within 45 days"), "earlier versions keep their words: {texts:?}");
+    let before = r["version"].clone();
+    let compared = t.act(&cm, revised, "compare_versions", json!({"from": 1, "to": 2})).await.expect("compared");
+    let changes = compared["changes"].as_array().unwrap();
+    assert!(changes.iter().any(|c| c["op"] == "delete" && c["text"].as_str().unwrap().contains("30")), "{compared}");
+    assert!(changes.iter().any(|c| c["op"] == "insert" && c["text"].as_str().unwrap().contains("45")), "{compared}");
+    assert!(compared["removed"].as_i64() >= Some(1) && compared["added"].as_i64() >= Some(1), "{compared}");
+    let redline = compared["file"]["content"].as_str().unwrap();
+    assert!(!redline.contains("<script") && redline.contains("&lt;script&gt;"), "the redline escapes what the contract says");
+    assert_eq!((compared["file"]["type"].as_str(), compared["from"].as_i64(), compared["to"].as_i64()), (Some("text/html"), Some(1), Some(2)));
+    assert_eq!(t.get("Contract", revised).await["version"], before, "compare writes nothing");
+    refused(t.act(&cm, revised, "compare_versions", json!({"from": 2, "to": 2})).await, "invalid", "one of this contract's versions");
+    refused(t.act(&cm, revised, "compare_versions", json!({"from": 1, "to": 9})).await, "invalid", "one of this contract's versions");
+    let other_cm = t.user("cm-other@northwind.test", &["Contract Manager"]).await;
+    refused(t.act(&other_cm, revised, "compare_versions", json!({"from": 1, "to": 2})).await, "not found", "");
 
     // ───────────── parties as records, signatories in order (DC-65, DC-67) ─────────────
     let customer = uid(&t.insert(&t.admin, "Customer", json!({"customer_name": "Globex"})).await["id"]);
@@ -655,6 +737,8 @@ async fn scenario() {
     let v = t.get("Contract", typed_id).await;
     assert_eq!(v["versions"].as_array().unwrap().len(), 2, "its next term, its next version");
     assert_ne!(v["versions"][0]["file"], v["versions"][1]["file"], "each kept");
+    assert!(v["versions"][0]["text"].as_str().is_some() && v["versions"][1]["text"].is_null(), "a renewal's version keeps no stale words");
+    assert_eq!(v["body_text"], frozen["body_text"], "its words stay those of the body last submitted");
     t.set(&cm, "ContractType", kind, json!({"renewal": "New Contract"})).await.unwrap();
     let made = t.act(&cm, typed_id, "renew_contract", Value::Null).await.expect("a new contract");
     let next = t.get("Contract", uid(&made["id"])).await;

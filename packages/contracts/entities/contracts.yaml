@@ -85,6 +85,7 @@
     - {name: made_by, type: email, read_only: true, in_list: true}
     - {name: made_at, type: datetime, read_only: true, in_list: true}
     - {name: reason, type: data, read_only: true, in_list: true}
+    - {name: text, type: text, read_only: true, hidden: true, description: "The words of this version's body, for comparing; empty for an attached PDF, a renewal, and versions kept before words were"}
 
 - name: Contract
   label: Contract
@@ -141,7 +142,11 @@
     - {name: terminated_on, type: date, read_only: true, no_copy: true}
     - {name: termination_reason, type: text, read_only: true, no_copy: true}
   actions:
-    - {name: submit_contract, label: Submit It, permission: write, condition: "doc.status == 'Draft'"}
+    - name: submit_contract
+      label: Submit It
+      permission: write
+      condition: "doc.status == 'Draft'"
+      contract: {completion: "Its body is frozen as its next version and its approval is asked: the contract is In Review, or Approved when no step applies"}
     - name: approve
       label: Approve It
       permission: write
@@ -170,7 +175,24 @@
         - {name: signed_file, type: data, label: Signed Copy, required: true, description: "The uploaded signed PDF (its /files/<id> path)"}
         - {name: signed_by, type: text, label: Signed By, required: true, description: "Who signed it, on each side"}
         - {name: signed_on, type: date, label: Signed On, required: true}
-    - {name: renew_contract, label: Renew It, permission: write, condition: "(doc.status == 'Active' || doc.status == 'Expired') && doc.renewed_by == null"}
+    - name: renew_contract
+      label: Renew It
+      permission: write
+      condition: "(doc.status == 'Active' || doc.status == 'Expired') && doc.renewed_by == null"
+      contract: {completion: "Its next term exists: the same contract with a later end and a new version of its body, or a new draft linked to it, as its type says"}
+    - name: compare_versions
+      label: Compare Versions
+      permission: read
+      read_only: true
+      condition: "size(doc.versions) > 1"
+      params:
+        - {name: from, type: int, label: From Version, required: true}
+        - {name: to, type: int, label: To Version, required: true}
+      contract:
+        completion: "The words removed and added between the two versions are returned, with the redline as a file; nothing is changed"
+        returns: {type: object, properties: {from: {type: integer}, to: {type: integer}, removed: {type: integer}, added: {type: integer},
+                  changes: {type: array, items: {type: object, properties: {op: {type: string, enum: [equal, delete, insert]}, text: {type: string}}}},
+                  file: {type: object, properties: {name: {type: string}, type: {type: string}, content: {type: string}}}}}
     - name: terminate_contract
       label: Terminate It
       permission: write

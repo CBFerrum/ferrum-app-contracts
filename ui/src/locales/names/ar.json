@@ -15,6 +15,7 @@
   "Clause Library": "مكتبة البنود",
   "Clause Name": "اسم البند",
   "Clauses": "البنود",
+  "Compare Versions": "مقارنة الإصدارات",
   "Confidentiality": "السرية",
   "Contract": "العقد",
   "Contract Approver": "معتمِد العقود",
@@ -40,6 +41,7 @@
   "Employment": "التوظيف",
   "Ends On": "ينتهي في",
   "Expired": "منتهي الصلاحية",
+  "From Version": "من الإصدار",
   "In Review": "قيد المراجعة",
   "Inside the notice period of a contract that renews by itself": "ضمن فترة إشعار عقد يتجدد تلقائيًا",
   "Intellectual Property": "الملكية الفكرية",
@@ -87,7 +89,9 @@
   "The PDF to sign: part of the terms, so attached before the contract is submitted": "ملف PDF للتوقيع: جزء من الشروط، فيُرفق قبل تقديم العقد",
   "The SHA-256 of its terms, its clauses' wording and its PDF as they were approved: sent for signature only while they are still the same": "بصمة SHA-256 لشروطه وصياغة بنوده وملف PDF الخاص به كما اعتُمدت: لا يُرسل للتوقيع إلا ما دامت كما هي",
   "The clause's wording when the contract was drafted": "صيغة البند عند صياغة العقد",
+  "The words of this version's body, for comparing; empty for an attached PDF, a renewal, and versions kept before words were": "كلمات نص هذا الإصدار للمقارنة؛ فارغة لملف PDF مرفق وللتجديد وللإصدارات المحفوظة قبل حفظ الكلمات",
   "Title": "العنوان",
+  "To Version": "إلى الإصدار",
   "Value": "القيمة",
   "What is waiting for approval or signature?": "ما الذي ينتظر الاعتماد أو التوقيع؟",
   "When a contract needs approval, and who signs for the organisation.": "متى يحتاج العقد إلى اعتماد، ومن يوقّع عن المؤسسة.",
@@ -96,5 +100,6 @@
   "Who read the PDF against the clauses and said it says what they say": "من قرأ ملف PDF مقابل البنود وأكد أنه يقول ما تقوله",
   "Who signs contracts for the organisation": "من يوقّع العقود عن المؤسسة",
   "Why": "السبب",
+  "Withdraw Approval": "سحب الموافقة",
   "Wording approved for use in contracts.": "صيغة معتمدة للاستخدام في العقود."
 }

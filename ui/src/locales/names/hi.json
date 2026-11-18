@@ -15,6 +15,7 @@
   "Clause Library": "धारा पुस्तकालय",
   "Clause Name": "धारा का नाम",
   "Clauses": "धाराएँ",
+  "Compare Versions": "संस्करणों की तुलना करें",
   "Confidentiality": "गोपनीयता",
   "Contract": "अनुबंध",
   "Contract Approver": "अनुबंध अनुमोदक",
@@ -40,6 +41,7 @@
   "Employment": "रोज़गार",
   "Ends On": "इस दिन समाप्त",
   "Expired": "समाप्त",
+  "From Version": "किस संस्करण से",
   "In Review": "समीक्षा में",
   "Inside the notice period of a contract that renews by itself": "अपने आप नवीनीकृत होने वाले अनुबंध की नोटिस अवधि में",
   "Intellectual Property": "बौद्धिक संपदा",
@@ -87,7 +89,9 @@
   "The PDF to sign: part of the terms, so attached before the contract is submitted": "हस्ताक्षर के लिए PDF: शर्तों का हिस्सा, इसलिए अनुबंध जमा होने से पहले संलग्न",
   "The SHA-256 of its terms, its clauses' wording and its PDF as they were approved: sent for signature only while they are still the same": "मंज़ूरी के समय इसकी शर्तों, इसके खंडों के शब्दों और इसकी PDF का SHA-256: यह हस्ताक्षर के लिए तभी भेजा जाता है जब ये वैसे ही हों",
   "The clause's wording when the contract was drafted": "अनुबंध ड्राफ़्ट होते समय धारा की शब्दावली",
+  "The words of this version's body, for comparing; empty for an attached PDF, a renewal, and versions kept before words were": "तुलना के लिए इस संस्करण के मुख्य भाग के शब्द; संलग्न PDF, नवीनीकरण और शब्द रखे जाने से पहले के संस्करणों के लिए खाली",
   "Title": "शीर्षक",
+  "To Version": "किस संस्करण तक",
   "Value": "मान",
   "What is waiting for approval or signature?": "अनुमोदन या हस्ताक्षर की प्रतीक्षा में क्या है?",
   "When a contract needs approval, and who signs for the organisation.": "अनुबंध को कब अनुमोदन चाहिए, और संगठन की ओर से कौन हस्ताक्षर करता है।",
@@ -96,5 +100,6 @@
   "Who read the PDF against the clauses and said it says what they say": "किसने PDF को खंडों से मिलाकर पढ़ा और कहा कि यह वही कहती है जो वे कहते हैं",
   "Who signs contracts for the organisation": "संगठन की ओर से अनुबंधों पर कौन हस्ताक्षर करता है",
   "Why": "क्यों",
+  "Withdraw Approval": "अनुमोदन वापस लें",
   "Wording approved for use in contracts.": "अनुबंधों में उपयोग के लिए अनुमोदित शब्दावली।"
 }

@@ -19,6 +19,8 @@ sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio",
 uuid = { version = "1.10", features = ["v4", "v7", "serde"] }
 # The upkeep's warning when Sign's requests cannot be read (src/sign.rs); already in the tree through the platform.
 tracing = "0.1"
+# Compare Versions: a word diff with a time limit (Apache-2.0).
+similar = "2"
 
 [dev-dependencies]
 # Its tests send contracts through Sign, with a PDF made here, and check that its interface is a
