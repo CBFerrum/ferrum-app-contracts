@@ -186,7 +186,7 @@ pub(crate) async fn renew(hc: &mut HookCtx<'_>, doc: &Doc) -> Result<Value> {
     hc.kernel.set_values_tx(&system, hc.tx, "Contract", contract, values.clone()).await?;
     let mut renewed = doc.clone();
     renewed.extend(values.clone());
-    if let Some(body) = crate::contract::freeze(hc.kernel, hc.tx, &system, &renewed, &hc.ctx.email, &format!("Renewed to {next_end}")).await? {
+    if let Some(body) = crate::contract::freeze(hc.kernel, hc.tx, &system, &renewed, &hc.ctx.email, &format!("Renewed to {next_end}"), false).await? {
         hc.kernel.set_values_tx(&system, hc.tx, "Contract", contract, body.clone()).await?;
         values.extend(body);
     }

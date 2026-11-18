@@ -29,6 +29,20 @@ fn terms(doc: &Doc) -> Vec<Option<String>> {
     t
 }
 
+/// What a contract out of its draft keeps: its terms, its clauses' own wording, and its notice days and signatories, which
+/// its body prints. Apart
+/// from `terms` so that the digest of a contract approved before them stays the same.
+fn kept(doc: &Doc) -> Vec<Option<String>> {
+    let mut t = terms(doc);
+    t.push(doc.get("notice_days").and_then(Value::as_i64).map(|v| v.to_string()));
+    t.extend(rows(doc, "clauses").iter().map(|c| s(c, "own_wording").map(str::trim).filter(|w| !w.is_empty()).map(str::to_string)));
+    for r in rows(doc, "signatories") {
+        t.extend(["name", "email", "role"].map(|k| s(&r, k).map(str::to_string)));
+        t.push(r.get("signing_order").and_then(Value::as_i64).map(|v| v.to_string()));
+    }
+    t
+}
+
 /// What an approval is bound to: the contract's terms, each clause's wording as drafted, and its PDF's
 /// stored SHA-256 (FEO-038). The same contract gives the same digest; any change gives another.
 pub(crate) async fn approved_digest(tx: &mut Tx, ctx: &Ctx, doc: &Doc) -> Result<String> {
@@ -110,14 +124,32 @@ async fn template_of(tx: &mut Tx, ctx: &Ctx, doc: &Doc) -> Result<Option<String>
 }
 
 /// Makes the contract's body from its type's template and keeps it as its next version: the file attached to the
-/// contract, never replaced (each version stays), its SHA-256, who and when, and its words for search. The values
-/// to write on the contract, or none when it has no type with a template.
-pub(crate) async fn freeze(k: &Kernel, tx: &mut Tx, ctx: &Ctx, doc: &Doc, by: &str, reason: &str) -> Result<Option<Doc>> {
-    let Some(template) = template_of(tx, ctx, doc).await? else { return Ok(None) };
+/// contract, never replaced (each version stays), its SHA-256, who and when, and its words. The words are taken only when
+/// `stored` (the record in the database is what `doc` holds): the page is rendered from the stored record, so at a
+/// renewal, whose new end is not stored yet, they would be the old body's (a renewal's version keeps no words). The
+/// values to write on the contract, or none. A contract with no template whose attached PDF is not its last version's
+/// gets a version of that PDF, with no words (they are inside the PDF).
+pub(crate) async fn freeze(k: &Kernel, tx: &mut Tx, ctx: &Ctx, doc: &Doc, by: &str, reason: &str, stored: bool) -> Result<Option<Doc>> {
     let contract = id(doc, "id").ok_or_else(|| Error::internal("a contract without an id"))?;
-    const KEPT: [&str; 7] = ["id", "version_no", "file", "sha256", "made_by", "made_at", "reason"];
+    const KEPT: [&str; 8] = ["id", "version_no", "file", "sha256", "made_by", "made_at", "reason", "text"];
     let mut versions: Vec<Doc> = rows(doc, "versions").into_iter().map(|r| r.into_iter().filter(|(k, _)| KEPT.contains(&k.as_str())).collect()).collect();
     let version = versions.iter().filter_map(|v| v.get("version_no").and_then(Value::as_i64)).max().unwrap_or(0) + 1;
+    let at = Utc::now().to_rfc3339();
+    let Some(template) = template_of(tx, ctx, doc).await? else {
+        let Some(file) = file_of(doc, "document") else { return Ok(None) };
+        let sha: Option<String> = sqlx::query_scalar("select sha256 from file_object where tenant_id = $1 and id = $2")
+            .bind(ctx.tenant)
+            .bind(file)
+            .fetch_optional(&mut **tx)
+            .await?
+            .flatten();
+        if sha.is_some() && versions.last().and_then(|v| s(v, "sha256")) == sha.as_deref() {
+            return Ok(None);
+        }
+        versions.push(obj(json!({"version_no": version, "file": s(doc, "document"), "sha256": sha, "made_by": by, "made_at": at, "reason": reason})));
+        k.set_child_rows_tx(ctx, tx, "Contract", "versions", contract, versions).await?;
+        return Ok(None);
+    };
     let title = s(doc, "title").unwrap_or("Contract");
     let g = ferrum_kernel::documents::Generate {
         template: template.clone(),
@@ -128,13 +160,132 @@ pub(crate) async fn freeze(k: &Kernel, tx: &mut Tx, ctx: &Ctx, doc: &Doc, by: &s
         values: Default::default(),
     };
     let made = ferrum_kernel::documents::generate(k, tx, ctx, &g).await?;
-    // The words of the body for search: the page as HTML, whether the file kept is a PDF or the page itself.
-    let words = k.render_document(ctx, &template, contract, None, false).await.map(|page| text_of(&String::from_utf8_lossy(&page.bytes))).unwrap_or_default();
-    versions.push(obj(
-        json!({"version_no": version, "file": made.url, "sha256": made.sha256, "made_by": by, "made_at": Utc::now().to_rfc3339(), "reason": reason}),
-    ));
+    let mut row = json!({"version_no": version, "file": made.url, "sha256": made.sha256, "made_by": by, "made_at": at, "reason": reason});
+    let mut values = json!({"document": made.url, "document_sha256": made.sha256});
+    if stored {
+        // The words of the body: the page as HTML, whether the file kept is a PDF or the page itself.
+        let words =
+            k.render_document(ctx, &template, contract, None, false).await.map(|page| text_of(&String::from_utf8_lossy(&page.bytes))).unwrap_or_default();
+        row["text"] = json!(words);
+        values["body_text"] = json!(words);
+    }
+    versions.push(obj(row));
     k.set_child_rows_tx(ctx, tx, "Contract", "versions", contract, versions).await?;
-    Ok(Some(obj(json!({"document": made.url, "document_sha256": made.sha256, "body_text": words}))))
+    Ok(Some(obj(values)))
+}
+
+/// One change between two versions' words: `equal`, `delete` or `insert`, with its words.
+pub(crate) type Change = (&'static str, String);
+
+/// What changed from `a` to `b`, word by word, runs of one kind merged. A diff that takes longer than two seconds
+/// stops there and gives what it found as coarser changes.
+pub(crate) fn changes(a: &str, b: &str) -> Vec<Change> {
+    let diff = similar::TextDiff::configure().timeout(std::time::Duration::from_secs(2)).diff_words(a, b);
+    let mut out: Vec<Change> = vec![];
+    for change in diff.iter_all_changes() {
+        let op = match change.tag() {
+            similar::ChangeTag::Equal => "equal",
+            similar::ChangeTag::Delete => "delete",
+            similar::ChangeTag::Insert => "insert",
+        };
+        match out.last_mut() {
+            Some((last, text)) if *last == op => text.push_str(change.value()),
+            _ => out.push((op, change.value().to_string())),
+        }
+    }
+    out
+}
+
+/// Every character that came from the contract, safe in a page.
+fn esc(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;").replace('\'', "&#39;")
+}
+
+/// The redline of `changes` between versions `from` and `to`: a page with no words of its own, what was removed struck
+/// through, what was added underlined.
+pub(crate) fn redline(title: &str, number: &str, from: i64, to: i64, changes: &[Change]) -> String {
+    let mut out = format!(
+        "<!doctype html><meta charset=utf-8><title>{} v{from} – v{to}</title><h1>{}</h1><p>v{from} → v{to}</p><p style=\"white-space:pre-wrap\">",
+        esc(number),
+        esc(title)
+    );
+    for (op, text) in changes {
+        match *op {
+            "delete" => out.push_str(&format!("<del>{}</del>", esc(text))),
+            "insert" => out.push_str(&format!("<ins>{}</ins>", esc(text))),
+            _ => out.push_str(&esc(text)),
+        }
+    }
+    out.push_str("</p>");
+    out
+}
+
+/// Compare Versions: the words removed and added between versions `from` and `to`, and the redline as a file.
+fn compare(doc: &Doc, params: &Value) -> Result<Value> {
+    let versions = rows(doc, "versions");
+    let pick = |field: &str| -> Result<(i64, Option<String>)> {
+        let n = params.get(field).and_then(|v| v.as_i64().or_else(|| v.as_str().and_then(|s| s.trim().parse().ok())));
+        let found = n.and_then(|n| versions.iter().find(|v| v.get("version_no").and_then(Value::as_i64) == Some(n)));
+        match (n, found) {
+            (Some(n), Some(v)) => Ok((n, s(v, "text").filter(|t| !t.is_empty()).map(str::to_string))),
+            _ => Err(Error::field(field, "is one of this contract's versions")),
+        }
+    };
+    let ((from, a), (to, b)) = (pick("from")?, pick("to")?);
+    if from == to {
+        return Err(Error::field("to", "is one of this contract's versions, another than From Version"));
+    }
+    let words =
+        |n: i64, t: Option<String>| t.ok_or_else(|| Error::invalid(format!("version {n} has no words kept: its body was an attached PDF or a renewal")));
+    let (a, b) = (words(from, a)?, words(to, b)?);
+    let changes = changes(&a, &b);
+    let count = |op: &str| changes.iter().filter(|(o, _)| *o == op).map(|(_, t)| t.split_whitespace().count()).sum::<usize>();
+    let number = s(doc, "number").unwrap_or_default();
+    Ok(json!({
+        "from": from, "to": to, "removed": count("delete"), "added": count("insert"),
+        "changes": changes.iter().map(|(op, text)| json!({"op": op, "text": text})).collect::<Vec<_>>(),
+        "file": {"name": format!("{number} v{from}-v{to}.html"), "type": "text/html", "content": redline(s(doc, "title").unwrap_or_default(), number, from, to, &changes)},
+    }))
+}
+
+/// A contract type's playbook: each clause it lists with that clause's fallback and what own wording and the fallback
+/// cost, and what any other clause costs.
+pub(crate) struct Playbook {
+    listed: Vec<(Uuid, Option<Uuid>, i64, i64)>,
+    unlisted: i64,
+}
+
+/// The playbook of the contract's type; none without a type.
+async fn playbook(tx: &mut Tx, ctx: &Ctx, doc: &Doc) -> Result<Option<Playbook>> {
+    let Some(kind) = id(doc, "kind") else { return Ok(None) };
+    let unlisted: Option<i64> = sqlx::query_scalar("select coalesce(unlisted_points, 1)::bigint from e_contract_type where tenant_id = $1 and id = $2")
+        .bind(ctx.tenant)
+        .bind(kind)
+        .fetch_optional(&mut **tx)
+        .await?;
+    let Some(unlisted) = unlisted else { return Ok(None) };
+    let listed = sqlx::query_as(
+        "select m.clause, c.fallback, coalesce(m.deviation_points, 1)::bigint, coalesce(m.fallback_points, 0)::bigint from e_contract_type__clauses m \
+         left join e_clause c on c.tenant_id = m.tenant_id and c.id = m.clause where m.tenant_id = $1 and m.parent_id = $2 order by m.idx",
+    )
+    .bind(ctx.tenant)
+    .bind(kind)
+    .fetch_all(&mut **tx)
+    .await?;
+    Ok(Some(Playbook { listed, unlisted }))
+}
+
+/// How a contract's `clause` departs from its type's playbook, and what that costs: its own wording costs the listed
+/// clause's points, a fallback its fallback points, a clause the type does not list the type's unlisted points.
+pub(crate) fn deviation(playbook: Option<&Playbook>, clause: Option<Uuid>, own: bool) -> (&'static str, i64) {
+    let Some(p) = playbook else { return ("None", 0) };
+    if let Some(row) = p.listed.iter().find(|r| Some(r.0) == clause) {
+        return if own { ("Own Wording", row.2) } else { ("None", 0) };
+    }
+    if let Some(row) = p.listed.iter().find(|r| r.1.is_some() && r.1 == clause) {
+        return if own { ("Own Wording", row.2) } else { ("Fallback", row.3) };
+    }
+    ("Not In Type", p.unlisted)
 }
 
 /// The clauses its type makes mandatory that it does not include, neither the clause nor its fallback.
@@ -183,7 +334,7 @@ impl DocHook for ContractHook {
     }
 
     fn fills(&self) -> &'static [&'static str] {
-        &["owner", "clauses"]
+        &["owner", "clauses", "deviation_score"]
     }
 
     async fn before_validate(&self, hc: &mut HookCtx<'_>, doc: &mut Doc) -> Result<()> {
@@ -215,17 +366,29 @@ impl DocHook for ContractHook {
                 .await?;
             clauses = listed.into_iter().map(|c| obj(json!({"id": Uuid::now_v7().to_string(), "clause": c.to_string()}))).collect();
         }
-        // Each clause's wording as it is now, its merge fields filled from the contract.
+        // Each clause's wording as it is now, or the wording agreed for this contract, its merge fields filled from the
+        // contract; the clause's version; and how far it departs from its type's playbook.
+        let playbook = playbook(hc.tx, hc.ctx, doc).await?;
+        let mut score = 0;
         for c in &mut clauses {
-            let text: Option<String> = sqlx::query_scalar("select text from e_clause where tenant_id = $1 and id = $2")
-                .bind(hc.ctx.tenant)
-                .bind(id(c, "clause"))
-                .fetch_optional(&mut **hc.tx)
-                .await?
-                .flatten();
-            c.insert("text".into(), json!(text.map(|t| fill(&t, doc))));
+            let clause = id(c, "clause");
+            let row: Option<(Option<String>, Option<i64>)> =
+                sqlx::query_as("select text, wording_version::bigint from e_clause where tenant_id = $1 and id = $2")
+                    .bind(hc.ctx.tenant)
+                    .bind(clause)
+                    .fetch_optional(&mut **hc.tx)
+                    .await?;
+            let (text, version) = row.unwrap_or_default();
+            let own = s(c, "own_wording").map(str::trim).filter(|w| !w.is_empty()).map(str::to_string);
+            let (deviation, points) = deviation(playbook.as_ref(), clause, own.is_some());
+            score += points;
+            c.insert("text".into(), json!(own.or(text).map(|t| fill(&t, doc))));
+            c.insert("clause_version".into(), json!(version));
+            c.insert("deviation".into(), json!(deviation));
+            c.insert("points".into(), json!(points));
         }
         doc.insert("clauses".into(), Value::Array(clauses.into_iter().map(Value::Object).collect()));
+        doc.insert("deviation_score".into(), json!(score));
         Ok(())
     }
 
@@ -259,9 +422,12 @@ impl DocHook for ContractHook {
         }
         if let Some(o) = old
             && !matches!(s(o, "status"), Some("Draft") | None)
-            && (terms(o) != terms(doc) || s(o, "document") != s(doc, "document") || s(o, "kind") != s(doc, "kind"))
+            && (kept(o) != kept(doc) || s(o, "document") != s(doc, "document") || s(o, "kind") != s(doc, "kind"))
         {
-            return Err(Error::invalid("a contract out of its draft keeps its terms"));
+            return Err(Error::invalid(match s(o, "status") {
+                Some("Approved") => "a contract out of its draft keeps its terms: withdraw its approval to change them",
+                _ => "a contract out of its draft keeps its terms",
+            }));
         }
         Ok(())
     }
@@ -280,7 +446,7 @@ impl DocHook for ContractHook {
                 let mut values = Doc::new();
                 let first = rows(doc, "versions").is_empty();
                 let reason = if first { "Submitted" } else { "Submitted again" };
-                if let Some(body) = freeze(hc.kernel, hc.tx, &system, doc, &hc.ctx.email, reason).await? {
+                if let Some(body) = freeze(hc.kernel, hc.tx, &system, doc, &hc.ctx.email, reason, true).await? {
                     values.extend(body);
                 }
                 values.insert("status".into(), json!("In Review"));
@@ -301,15 +467,20 @@ impl DocHook for ContractHook {
             }
             // The approval policy is satisfied, or asked nobody: the contract approved, bound to what it was given.
             "approve" => json!({"status": "Approved", "approved_digest": approved_digest(hc.tx, hc.ctx, doc).await?, "decision_note": null}),
+            // Back to its draft, bound to nothing: changed, it is approved again only through Submit It.
+            "withdraw_approval" => {
+                let why = note("reason").ok_or_else(|| Error::field("reason", "a withdrawal says why"))?;
+                json!({"status": "Draft", "approved_digest": null, "decision_note": format!("Approval withdrawn by {}: {why}", hc.ctx.email)})
+            }
             "send_for_signature" => {
                 // What goes for signature is what was approved, wording and PDF (FEO-038); one approved before
                 // approvals were bound has nothing to compare.
                 if let Some(approved) = s(doc, "approved_digest")
                     && approved != approved_digest(hc.tx, hc.ctx, doc).await?
                 {
-                    return Err(Error::invalid("its wording or its PDF is not what was approved: send it back and approve it again"));
+                    return Err(Error::invalid("its wording or its PDF is not what was approved: withdraw its approval and submit it again"));
                 }
-                let request = crate::sign::send(hc.kernel, &system, hc.tx, doc).await?;
+                let request = crate::sign::send(hc.kernel, hc.ctx, &system, hc.tx, doc).await?;
                 json!({"status": "Out for Signature", "sign_request": request.to_string()})
             }
             "record_signed_copy" => {
@@ -331,6 +502,7 @@ impl DocHook for ContractHook {
                        "signed_elsewhere_by": by, "decision_note": format!("Signed elsewhere, recorded by {}", hc.ctx.email)})
             }
             "renew_contract" => return crate::term::renew(hc, doc).await.map(Some),
+            "compare_versions" => return compare(doc, params).map(Some),
             "terminate_contract" => {
                 let why = note("reason").ok_or_else(|| Error::field("reason", "a termination says why"))?;
                 json!({"status": "Terminated", "terminated_on": hc.ctx.today().to_string(), "termination_reason": why, "notice_due": false})
@@ -349,6 +521,42 @@ pub struct ClauseHook;
 impl DocHook for ClauseHook {
     fn name(&self) -> &'static str {
         "contracts.clause"
+    }
+
+    fn fills(&self) -> &'static [&'static str] {
+        &["wording_version", "versions"]
+    }
+
+    /// Each new wording is kept as its next version, with who and when; the same wording saved again is not one. A
+    /// clause from before versions first keeps what it said as version 1.
+    async fn before_validate(&self, hc: &mut HookCtx<'_>, doc: &mut Doc) -> Result<()> {
+        let stored: Option<Option<String>> = match id(doc, "id") {
+            Some(c) => {
+                sqlx::query_scalar("select text from e_clause where tenant_id = $1 and id = $2")
+                    .bind(hc.ctx.tenant)
+                    .bind(c)
+                    .fetch_optional(&mut **hc.tx)
+                    .await?
+            }
+            None => None,
+        };
+        if stored.as_ref().is_some_and(|was| was.as_deref() == s(doc, "text")) {
+            return Ok(());
+        }
+        let mut versions: Vec<Doc> = if stored.is_some() { rows(doc, "versions") } else { vec![] };
+        if let Some(was) = stored
+            && versions.is_empty()
+        {
+            versions.push(obj(json!({"id": Uuid::now_v7().to_string(), "version_no": 1, "text": was})));
+        }
+        let next = versions.iter().filter_map(|v| v.get("version_no").and_then(Value::as_i64)).max().unwrap_or(0) + 1;
+        let by = Some(hc.ctx.email.as_str()).filter(|e| !e.is_empty());
+        versions.push(obj(
+            json!({"id": Uuid::now_v7().to_string(), "version_no": next, "text": s(doc, "text"), "changed_by": by, "changed_at": Utc::now().to_rfc3339()}),
+        ));
+        doc.insert("wording_version".into(), json!(next));
+        doc.insert("versions".into(), Value::Array(versions.into_iter().map(Value::Object).collect()));
+        Ok(())
     }
 
     async fn validate_change(&self, hc: &mut HookCtx<'_>, old: Option<&Doc>, doc: &Doc) -> Result<()> {
@@ -374,6 +582,32 @@ mod tests {
         assert_eq!(fill("Paid by {{ doc.counterparty_name }} ({{doc.value}}).", &doc), "Paid by Globex (5000).");
         assert_eq!(fill("{{ doc.notice_days }} days, {{ other }} and {{ doc.x-y }}", &doc), " days, {{ other }} and {{ doc.x-y }}");
         assert_eq!(fill("unclosed {{ doc.value", &doc), "unclosed {{ doc.value");
+    }
+
+    #[test]
+    fn deviation_follows_the_playbook() {
+        let (std, fallback, other) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+        let p = Playbook { listed: vec![(std, Some(fallback), 3, 2)], unlisted: 1 };
+        assert_eq!(deviation(Some(&p), Some(std), false), ("None", 0));
+        assert_eq!(deviation(Some(&p), Some(std), true), ("Own Wording", 3));
+        assert_eq!(deviation(Some(&p), Some(fallback), false), ("Fallback", 2));
+        assert_eq!(deviation(Some(&p), Some(fallback), true), ("Own Wording", 3));
+        assert_eq!(deviation(Some(&p), Some(other), true), ("Not In Type", 1));
+        assert_eq!(deviation(None, Some(other), true), ("None", 0));
+    }
+
+    #[test]
+    fn changes_merge_runs_of_one_kind() {
+        let c = changes("paid within 30 days net", "paid within 45 days net");
+        let want: Vec<Change> = vec![("equal", "paid within ".into()), ("delete", "30".into()), ("insert", "45".into()), ("equal", " days net".into())];
+        assert_eq!(c, want);
+    }
+
+    #[test]
+    fn the_redline_escapes_what_the_contract_says() {
+        let page = redline("A <b>", "CTR-1", 1, 2, &[("equal", "x & ".into()), ("delete", "<script>".into()), ("insert", "'\"".into())]);
+        assert!(!page.contains("<script") && !page.contains("<b>"), "{page}");
+        assert!(page.contains("<del>&lt;script&gt;</del>") && page.contains("<ins>&#39;&quot;</ins>") && page.contains("x &amp; "), "{page}");
     }
 
     #[test]

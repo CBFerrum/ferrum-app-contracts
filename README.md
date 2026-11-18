@@ -121,8 +121,13 @@ governs.
   contract's fields, parties and clauses. Print the contract with that template at any time.
 - **A body kept by version.** Each Submit It freezes the body as a file kept on the contract and never replaced.
   The Versions table lists each one with its number, digest (SHA-256), who made it, when and why (submitted,
-  submitted again after being sent back, renewed).
-- **Contracts without a type.** A contract with no type keeps an attached PDF instead.
+  submitted again after being sent back, renewed). Each version keeps the words of its body, so earlier versions can
+  be compared. A renewal's version keeps a file and no words: its words would be those of the old term's body.
+- **Contracts without a type.** A contract with no type keeps an attached PDF instead. Each submit of a PDF it did
+  not have before is a version too, with its file and digest; the words inside a PDF are not read.
+- **Compare Versions.** Pick two version numbers and download a redline page: what was removed struck through, what
+  was added underlined, word by word. An agent calls `contracts.contract.compare_versions` and gets the same changes
+  as data. It reads only; whoever may read the contract may compare it.
 - **Numbering.** Every contract gets a number such as `CTR-2026-00001`.
 - **Category.** Sales, Purchase, Service, Non-Disclosure, Employment, Lease or Other, for filters and reports.
 
@@ -136,8 +141,10 @@ governs.
 - **Fallbacks.** A clause can name a fallback: the wording offered when this one is refused. Where a type makes a
   clause mandatory, a contract may carry the fallback in its place.
 - **Mandatory clauses.** A contract of a type is submitted only with each mandatory clause or its fallback.
-- **Wording kept as drafted.** A contract keeps the wording of each clause as it was when drafted. Changing the
-  library later does not change a contract that already used it.
+- **Wording kept as drafted.** A contract keeps the wording of each clause as it was when drafted, and the clause's
+  version it came from. Changing the library later does not change a contract that already used it.
+- **Clause versions.** Every change of a clause's wording is kept as a numbered version with who changed it and
+  when, so Legal can see what a clause said at any time. Saving the same wording again is not a new version.
 
 ### 📝 Drafting
 
@@ -148,19 +155,31 @@ governs.
 - **Renewal Notice On.** Worked out for you: the end date less the notice days.
 - **Department and owner.** The creator becomes the owner. The department is read by approval policies that route
   by department.
-- **Terms are kept.** Out of its draft, a contract keeps its party, type, value, term, renewal, clauses and
-  document. They no longer change under an approval.
+- **Own wording.** A contract may carry its own wording for a clause, agreed for that contract. It is what the body
+  prints and what is approved, its merge fields filled, and it counts as a deviation.
+- **A type's playbook.** A contract type's clause table is its playbook: each listed clause says what own wording
+  costs (Deviation Points, default 1) and what carrying its fallback costs (Fallback Points, default 0); the type says
+  what any clause it does not list costs (Unlisted Points, default 1). Each clause row shows its Deviation (None,
+  Fallback, Own Wording, Not In Type) and Points, and the contract its Deviation Score, worked out at each save of the
+  draft. A contract with no type scores 0. A playbook changed later re-scores a draft when it is saved again.
+- **Terms are kept.** Out of its draft, a contract keeps its party, type, value, term, renewal, notice days,
+  signatories, clauses, their own wording and document. They no longer change under an approval. To change an
+  approved one, Withdraw Approval (saying why) puts it back in its draft, and it is approved again through Submit It.
 - **Contract Settings.** The approval threshold (default 10,000), who signs for the organisation when a contract
   names no signatories (name and email, required) and the reminder days (default 14, 0 for none).
 
 ### ✅ Approval by policy
 
 - **Submit It** puts a contract In Review and asks the package's approval policy, on the contract's Approve It.
-- **The default policy.** A contract worth the settings' threshold or more needs one Contract Approver other than
-  whoever submitted it, with a reminder after two days. A cheaper contract is approved at once.
+- **The default policy.** A contract that departs from its type's playbook (a Deviation Score above zero) is
+  approved by Legal first, whatever it is worth; with nobody holding Legal, its submit is refused. A contract worth
+  the settings' threshold or more needs one Contract Approver other than whoever submitted it. Each step reminds
+  after two days. A cheaper contract that keeps to its playbook is approved at once.
 - **Your own policy.** A workspace edits the policy on Contract's Approve It in Customize. Steps can be set by value
   band, by type, by department, in order or together, as N of M, with stand-ins and escalation. While it waits, the
   contract stays as it is.
+- **Policies on other actions.** A workspace may put the same kind of policy on Send for Signature and on Terminate
+  It in Customize: the action then waits for the approvers and runs, as whoever asked, once they approve.
 - **Approvers decide under Approvals.** A rejection sends the contract back to Draft, with the reason, at the next
   upkeep; so does a request its submitter recalls. Who decided, when and what they said is the request's record.
 - **An approval bound to what was approved.** The approval is bound to a digest of the terms, the clauses' wording
@@ -180,8 +199,11 @@ governs.
   with. A contract with no type and no signatories keeps two boxes at fixed places.
 - **Follows Sign.** At the next upkeep, a completed request makes the contract Signed with the sealed PDF; a
   request that is declined, expired or voided returns the contract to Approved and says why.
-- **A page is refused up front.** Where there is no PDF service, a body is kept as a page. Send for Signature
-  then refuses and names `FERRUM_PDF_URL`. The contract stays Approved and no request is made.
+- **A page is refused up front.** A typed contract's body is a PDF only where the server has a PDF service
+  (`FERRUM_PDF_URL`). Without one it is kept as a page, which cannot be sent to Sign: Send for Signature refuses and
+  names `FERRUM_PDF_URL`, the contract stays Approved and no request is made. Record a signed copy instead.
+- **Through the platform's gate.** Contracts makes, places, sends and reads Sign's requests only through Sign's
+  declared operations: each call has a receipt naming Contracts and the person it acts for.
 - **Signed elsewhere.** Record Signed Copy takes the uploaded signed PDF, who signed and when. The contract becomes
   Signed, is marked Signed Elsewhere and keeps its own copy. From a draft (an import), only a Contract Approver or
   Legal can record it.
@@ -255,6 +277,7 @@ flowchart LR
     A["Draft"] -->|"Submit It"| B["In Review"]
     B -->|"Approved by policy"| C["Approved"]
     B -->|"Rejected or recalled"| A
+    C -->|"Withdraw Approval"| A
     C -->|"Send for Signature"| D["Out for Signature"]
     D -->|"Declined or expired"| C
     D -->|"Signed in Sign"| E["Signed"]
@@ -320,7 +343,7 @@ records are optional and appear when the matching app is installed.
 
 | With | How | Needs |
 |---|---|---|
-| **Sign** | Signature requests, order of signing, sealed PDF back on the contract | Sign installed (comes with Contracts); `FERRUM_PDF_URL` for the PDF service |
+| **Sign** | Signature requests, order of signing, sealed PDF back on the contract, through Sign's operations `sign.sign_request.create`, `.update`, `.send` and `.read` (`^0.2`, declared in `uses`) | Sign installed (comes with Contracts); `FERRUM_PDF_URL` for the PDF service |
 | **Parties** (`contracts_parties`) | Customer, Supplier and Contact links on a contract | Parties app |
 | **CRM** (`contracts_crm`) | Opportunity the contract closes | CRM app |
 | **Selling** (`contracts_selling`) | Sales order the contract governs | ERP selling |
@@ -341,10 +364,10 @@ Compared with five contract lifecycle management products: Ironclad, DocuSign CL
 |---|:-:|:-:|:-:|:-:|:-:|:-:|
 | Contract types with templates that generate the body | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Clause library with approved wording and fallbacks | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Clause versions and playbooks | ❌ | ✅ | 🟡 | ✅ | ✅ | ✅ |
+| Clause versions and playbooks | ✅ | ✅ | 🟡 | ✅ | ✅ | ✅ |
 | Merge fields filled from record data | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Version history of the body | 🟡¹ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Compare two versions | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Compare two versions | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Edit and redline with the counterparty | ❌ | ✅ | 🟡² | 🟡² | 🟡² | ✅ |
 | Business intake request triaged by legal | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Approval routing by value, type or department | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
@@ -391,7 +414,7 @@ Compared with five contract lifecycle management products: Ironclad, DocuSign CL
 
 - ✏️ **Redlining and negotiation** with the counterparty, and a counterparty portal.
 - 🤖 **AI** that reads a contract, fills its fields and checks it against a playbook.
-- 📥 **Intake and playbooks**: business request forms, clause versions and deviation scoring.
+- 📥 **Intake**: business request forms.
 - 🔎 **Full-text search** inside uploaded PDFs.
 - 🧬 **Contract hierarchies**: amendments, master agreements and orders beneath them.
 - 📈 **Dashboards** and analytics, and years of integrations with other vendors' systems.
@@ -403,6 +426,11 @@ Compared with five contract lifecycle management products: Ironclad, DocuSign CL
 
 ### ✅ Recently shipped
 
+- [x] **0.8.0.** Clause versions, own wording on a contract, a type's playbook with a deviation score, and Legal's
+  step in the approval policy for a contract that departs from it.
+- [x] **0.7.0.** Every version keeps its words, an attached PDF is a version, and Compare Versions gives a redline.
+- [x] **0.6.0.** Sign reached through its declared operations; one signed copy however many upkeeps run; notice days
+  and signatories kept with the terms; Withdraw Approval.
 - [x] **0.5.0**: Upkeep runs one workspace at a time, on whichever replica is free.
 - [x] **0.4.3.** What happens today is dated on the workspace's day, not the UTC day.
 - [x] **0.4.2.** Rebuilt on Ferrum-Frontend 06bd1a2.
@@ -421,7 +449,6 @@ Compared with five contract lifecycle management products: Ironclad, DocuSign CL
 ### 🔜 Next up
 
 - [ ] **Redlining.** Edit a body with tracked changes and let the counterparty respond, because most contracts are negotiated.
-- [ ] **Compare two versions** of a body, as the versions are already kept.
 - [ ] **Amendments and master agreements.** A parent link with orders and statements of work beneath it.
 - [ ] **Recurring obligations** with a linked clause and an evidence upload.
 - [ ] **Business intake.** A request from outside legal that legal triages into a contract.
@@ -430,8 +457,6 @@ Compared with five contract lifecycle management products: Ironclad, DocuSign CL
 ### 🔭 Later
 
 **Drafting and negotiation**
-- [ ] Clause versions and playbooks with preferred and fallback wording per type.
-- [ ] Deviation scoring that routes an approval by how far a contract strays from the playbook.
 - [ ] Signature boxes placed by marks in an uploaded PDF.
 
 **Repository and search**
@@ -504,7 +529,8 @@ Cargo.toml, build.rs          the Rust crate; build.rs embeds packages/ and ui/d
 src/
   lib.rs                      registers the packages, hooks, reports and the upkeep
   contract.rs                 submit, approval, clauses, confidentiality rules
-  sign.rs                     send for signature and follow the Sign request
+  sign.rs                     send for signature and follow the Sign request, through Sign's operations
+  keys.rs                     the app's vault handle, which proves a call of Sign's operations is Contracts'
   term.rs                     activation, renewal, expiry, notice and reminders
   reports.rs                  the four reports
 packages/

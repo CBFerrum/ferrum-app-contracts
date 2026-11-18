@@ -1,4 +1,5 @@
-//! Signature through Sign. An approved contract with its PDF goes to Sign as a request, to its signatories in
+//! Signature through Sign, only through Sign's declared operations at the platform's gate (`uses` in the package; the
+//! app's vault handle, `keys.rs`, proves the calls are Contracts'). An approved contract with its PDF goes to Sign as a request, to its signatories in
 //! their order (equal orders sign at the same time); a contract that names none goes to the counterparty, then the
 //! organisation's signatory. Each signatory's box is on the document's last page, the signature page its type's
 //! template ends with: two columns of blocks, one per signatory in the order listed. Upkeep follows the request:
@@ -7,9 +8,26 @@
 
 use crate::obj;
 use ferrum_domain::util::{id, rows, s};
+use ferrum_kernel::capability::Invocation;
 use ferrum_kernel::{Ctx, Doc, Error, Kernel, Result, Tx};
 use serde_json::{Value, json};
 use uuid::Uuid;
+
+/// Sign's operations Contracts uses, each declared in its package (`uses`) with the versions it was built for.
+const CREATE: &str = "sign.sign_request.create";
+const UPDATE: &str = "sign.sign_request.update";
+const SEND: &str = "sign.sign_request.send";
+const READ: &str = "sign.sign_request.read";
+
+/// Sign's operation `capability` on `input`, as Contracts, for `ctx`'s person, in `tx`, once per `key` (none for a
+/// read): the record it made or read, or the action's answer.
+async fn call(k: &Kernel, ctx: &Ctx, tx: &mut Tx, capability: &str, input: Value, key: Option<String>) -> Result<Doc> {
+    let mut inv = Invocation::new(capability, input);
+    if let Some(key) = key {
+        inv = inv.key(key);
+    }
+    Ok(obj(k.call_tx(&crate::keys::handle(k, ctx)?, ctx, tx, &inv).await?.result))
+}
 
 /// Signature blocks a signature page holds: two columns of six.
 pub(crate) const PER_PAGE: usize = 12;
@@ -21,8 +39,9 @@ pub(crate) fn place(n: usize) -> (i64, i64) {
     (x, 120 + (n / 2) as i64 * 110 + 30)
 }
 
-/// Sends `contract` for signature and returns the Sign request's id.
-pub(crate) async fn send(k: &Kernel, ctx: &Ctx, tx: &mut Tx, contract: &Doc) -> Result<Uuid> {
+/// Sends `contract` for signature and returns the Sign request's id. Its checks read as `ctx` (the system); Sign's
+/// operations are called for `person`, who is their receipts' actor.
+pub(crate) async fn send(k: &Kernel, person: &Ctx, ctx: &Ctx, tx: &mut Tx, contract: &Doc) -> Result<Uuid> {
     let document = s(contract, "document").ok_or_else(|| {
         Error::field("document", "it left its draft without the PDF to sign, which is part of its terms: draft it again with the PDF attached")
     })?;
@@ -81,54 +100,63 @@ pub(crate) async fn send(k: &Kernel, ctx: &Ctx, tx: &mut Tx, contract: &Doc) -> 
             })
             .collect()
     };
-    let draft = k
-        .insert_tx(
-            ctx,
-            tx,
-            "SignRequest",
-            obj(json!({
-                "title": s(contract, "title"), "document": document, "signing_mode": mode,
-                "message": match s(contract, "approved_digest") {
-                    Some(d) => format!("Please sign {}, approved as {}", s(contract, "title").unwrap_or("the contract"), &d[..12.min(d.len())]),
-                    None => format!("Please sign {}", s(contract, "title").unwrap_or("the contract")),
-                },
-                "reference_entity": "Contract", "reference_id": s(contract, "id"),
-                "signers": signers,
-                "fields": fields(1),
-            })),
-        )
-        .await?;
+    let contract_id = s(contract, "id").ok_or_else(|| Error::internal("a contract without an id"))?;
+    // One request per send: a contract sent back and sent again names its previous request, so its next key is new.
+    let previous = s(contract, "sign_request").unwrap_or("first");
+    let values = json!({
+        "title": s(contract, "title"), "document": document, "signing_mode": mode,
+        "message": match s(contract, "approved_digest") {
+            Some(d) => format!("Please sign {}, approved as {}", s(contract, "title").unwrap_or("the contract"), &d[..12.min(d.len())]),
+            None => format!("Please sign {}", s(contract, "title").unwrap_or("the contract")),
+        },
+        "reference_entity": "Contract", "reference_id": contract_id,
+        "signers": signers,
+        "fields": fields(1),
+    });
+    let draft = call(k, person, tx, CREATE, json!({"values": values}), Some(format!("sign:{contract_id}:{previous}"))).await?;
     let request = id(&draft, "id").ok_or_else(|| Error::internal("a sign request without an id"))?;
     // The signatures go on the last page, once Sign has measured the document.
     let pages = draft.get("page_count").and_then(Value::as_i64).unwrap_or(1);
     if pages > 1 {
-        k.update_tx(ctx, tx, "SignRequest", request, obj(json!({"fields": fields(pages)})), None).await?;
+        let place = json!({"id": request.to_string(), "values": {"fields": fields(pages)}});
+        call(k, person, tx, UPDATE, place, Some(format!("sign-place:{request}"))).await?;
     }
-    k.run_action_tx(ctx, tx, "SignRequest", request, "send", &json!({})).await?;
+    call(k, person, tx, SEND, json!({"id": request.to_string(), "params": {}}), Some(format!("sign-send:{request}"))).await?;
     Ok(request)
 }
 
-/// Contracts out for signature, moved on as their Sign requests have.
+/// Contracts out for signature, moved on as their Sign requests have. Each is locked first: a second upkeep at once
+/// waits, then finds it moved on and leaves it, so the sealed PDF is copied once.
 pub(crate) async fn follow(k: &Kernel, ctx: &Ctx, tx: &mut Tx) -> Result<()> {
-    let out: Vec<(Uuid, Uuid)> =
-        sqlx::query_as("select id, sign_request from e_contract where tenant_id = $1 and status = 'Out for Signature' and sign_request is not null")
-            .bind(ctx.tenant)
-            .fetch_all(&mut **tx)
-            .await?;
+    let out: Vec<(Uuid, Uuid)> = sqlx::query_as(
+        "select id, sign_request from e_contract where tenant_id = $1 and status = 'Out for Signature' and sign_request is not null order by id for update",
+    )
+    .bind(ctx.tenant)
+    .fetch_all(&mut **tx)
+    .await?;
     for (contract, request) in out {
-        // Signed on the workspace's day of the moment Sign completed, not the UTC day.
-        let row: Option<(Option<String>, Option<String>, Option<chrono::NaiveDate>)> =
-            sqlx::query_as("select status, sealed_document, (completed_at at time zone $3)::date from e_sign_request where tenant_id = $1 and id = $2")
-                .bind(ctx.tenant)
-                .bind(request)
-                .bind(&ctx.schema.timezone)
-                .fetch_optional(&mut **tx)
-                .await?;
-        let Some((status, sealed, completed)) = row else { continue };
-        let values: Value = match status.as_deref() {
+        let found = match call(k, ctx, tx, READ, json!({"id": request.to_string()}), None).await {
+            Ok(found) => found,
+            Err(Error::NotFound(_)) => continue,
+            // Not granted here, or Sign at a version this was not built for: nothing more to follow in this run.
+            Err(e @ (Error::Forbidden(_) | Error::Refused { .. } | Error::Unavailable(_))) => {
+                tracing::warn!(tenant = %ctx.tenant, error = %e, "Contracts could not read Sign's requests: signatures are not followed in this upkeep");
+                return Ok(());
+            }
+            Err(e) => return Err(e),
+        };
+        let values: Value = match s(&found, "status") {
             Some("Completed") => {
+                // Signed on the workspace's day of the moment Sign completed, not the UTC day.
+                let completed: Option<chrono::NaiveDate> = match s(&found, "completed_at") {
+                    Some(at) => {
+                        sqlx::query_scalar("select ($1::timestamptz at time zone $2)::date").bind(at).bind(&ctx.schema.timezone).fetch_one(&mut **tx).await?
+                    }
+                    None => None,
+                };
                 // The sealed PDF is Sign's, kept with its audit and read only by who may read that. The
                 // contract keeps a copy of its own, which whoever reads the contract may open.
+                let sealed = s(&found, "sealed_document").map(str::to_string);
                 let signed = match sealed.as_deref().and_then(|u| u.rsplit('/').next()).and_then(|f| f.parse::<Uuid>().ok()) {
                     Some(file) => k.copy_file(ctx, file, Some(("Contract", contract))).await?.get("url").and_then(Value::as_str).map(str::to_string),
                     None => sealed,

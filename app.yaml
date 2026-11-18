@@ -1,6 +1,6 @@
 id: contracts
 name: Contracts
-version: 0.5.0
+version: 0.8.0
 publisher: cbferrum
 summary: "Contracts from types and approved clauses, their body generated and kept by version, approval by policy, signature through Sign to any signatories, renewal, notice, obligations and reminders"
 description: README.md
@@ -37,7 +37,10 @@ contributes:
       instructions: >-
         A Contract goes Draft, In Review, Approved, Out for Signature, Signed, then Active until it Expires or is
         Terminated; submitting it asks the approval policy on Approve It, which at the workspace's threshold or more
-        asks a Contract Approver other than whoever submitted it. A Contract Type names the document template its
+        asks a Contract Approver other than whoever submitted it. Out of its draft it keeps its terms, notice days and
+        signatories; Withdraw Approval puts an approved one back in its draft. A clause keeps each wording as a
+        numbered version; a contract row may carry own_wording, and each row's deviation and points against its
+        type's clause table sum to the contract's deviation_score, which above zero sends it to Legal first. A Contract Type names the document template its
         body is made from; each submit keeps the body as a version (versions). Its clauses come from the approved library (Clause,
         ContractClause), its signatories sign in order, and one signed elsewhere is marked signed_elsewhere. A
         confidential contract is read by its owner, its readers and Legal. An Obligation (Open, Done; an obligation

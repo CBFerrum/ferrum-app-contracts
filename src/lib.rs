@@ -5,8 +5,8 @@
 //! * `contract`: drafts from the clause library, the body made from the type's template and frozen
 //!   at each submit, approval through the platform's policy on Approve It, terms kept once out of the
 //!   draft; clauses approved by a Contract Approver; a copy signed elsewhere recorded.
-//! * `sign`: an approved contract sent to Sign, to its signatories in order; followed to its
-//!   signature, or back to approved.
+//! * `sign`: an approved contract sent to Sign, to its signatories in order, through Sign's declared
+//!   operations; followed to its signature, or back to approved.
 //! * `term`: signed contracts active from their start, renewed or expired at their end, notice due
 //!   before a renewal; obligations overdue when late; reminders, once each; Renew It.
 //! * `reports`: by state, ending or renewing, obligations due, days from draft to signed.
@@ -15,13 +15,14 @@
 //! so a workspace without the `contracts` package never runs them.
 
 mod contract;
+mod keys;
 mod reports;
 mod sign;
 mod term;
 
 use chrono::NaiveDate;
 use ferrum_domain::reports::ReportSource;
-use ferrum_kernel::{Ctx, Doc, HookRegistry, Kernel, Result};
+use ferrum_kernel::{Ctx, Doc, DocHook, HookRegistry, Kernel, Result};
 use serde_json::Value;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -37,12 +38,12 @@ pub fn packages() -> std::result::Result<Vec<ferrum_meta::Package>, ferrum_meta:
     ferrum_meta::catalog::load_embedded(EMBEDDED)
 }
 
-/// Registers this app's document hooks.
+/// Registers this app's document hooks, inside its registration as app `contracts` (`hooks.app("contracts", …)`): it
+/// keeps its vault handle, with which it calls Sign's operations.
 pub fn register(hooks: &mut HookRegistry) {
-    hooks
-        .register("Contract", Arc::new(contract::ContractHook))
-        .register("Clause", Arc::new(contract::ClauseHook))
-        .register("Obligation", Arc::new(term::ObligationHook));
+    let contract: Arc<dyn DocHook> = Arc::new(contract::ContractHook);
+    keys::remember(&contract, hooks.vault());
+    hooks.register("Contract", contract).register("Clause", Arc::new(contract::ClauseHook)).register("Obligation", Arc::new(term::ObligationHook));
 }
 
 /// This app's reports.

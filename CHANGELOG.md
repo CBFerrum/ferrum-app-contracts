@@ -1,5 +1,58 @@
 # Changelog
 
+## 0.8.0
+
+Needs the same platform as 0.7.0. The `contracts` package is 0.6.0: Clause gains `wording_version` and a Versions
+table; a type's clause rows gain Deviation Points and Fallback Points, the type Unlisted Points; a contract's clause
+rows gain Version, Own Wording, Deviation and Points, the contract a Deviation Score; the backfill
+`contract_deviation_zero` scores contracts made before at 0. `ui/dist` rebuilt with Ferrum-Frontend `5e2661f`.
+
+- **Clause versions.** Every change of a clause's wording is kept as a numbered version with who and when (a clause
+  from before keeps what it said as version 1 at its next change), and a contract row keeps the version it used.
+- **Own wording.** A contract may carry its own wording for a clause: it is what the body prints and what the
+  approval binds, and it is kept with the terms once out of the draft.
+- **A type's playbook.** A type's clause table says what own wording and a fallback cost, and the type what any
+  other clause costs; each draft save marks each row and sums the contract's Deviation Score.
+- **Legal's step.** The packaged policy on Approve It asks Legal first when the score is above zero. A workspace that
+  edited the policy keeps its own copy. With nobody holding Legal, such a submit is refused and nothing is kept of it.
+
+## 0.7.0
+
+Needs the same platform as 0.6.0. The `contracts` package is 0.5.0: Version gains `text` (empty on versions kept
+before; nothing to migrate). `ui/dist` rebuilt with Ferrum-Frontend `5e2661f`. New
+dependency `similar` (Apache-2.0).
+
+- **Every version keeps its words.** A typed contract's body was frozen at each Submit It, but only the latest body's
+  words were kept, on the contract. Each version now keeps its own (`text`), so earlier ones can be compared. A
+  renewal's version keeps none: the page is rendered from the stored record, which does not have the new end yet.
+  `body_text` stays that of the body last submitted.
+- **An attached PDF is a version.** A contract with no type gets a version at each submit of a PDF it did not have
+  before (by SHA-256), with its file and digest and no words.
+- **Compare Versions** (`contracts.contract.compare_versions`, read only, `permission: read`): the words removed and
+  added between two versions, as data, and a redline page to download. Submit It and Renew It now carry a contract.
+- Withdraw Approval's label is in the Arabic and Hindi catalogs.
+
+## 0.6.0
+
+Needs the same platform as 0.5.0 and Sign's package at 0.2. The `contracts` package is 0.4.0. No database or interface
+change; nothing to migrate.
+
+- **Sign through the platform's gate.** Contracts no longer writes Sign's records itself. Its package declares the four
+  Sign operations it uses (`sign.sign_request.create`, `.update`, `.send`, `.read`, `^0.2`), which the install screen
+  lists, and it calls them with its own vault handle: each call has a receipt naming Contracts and the person it acted
+  for. What a person sees is the same: the same request, the same boxes on the last page, the same follow-up. A
+  workspace whose Contracts does not declare them is refused (`forbidden`) and the contract stays Approved. A
+  contract sent back and sent again makes a new request. The server registers it as `hooks.app("contracts", …)`.
+- **One signed copy.** Two upkeeps at once each copied the sealed PDF onto a contract. The upkeep now locks each
+  contract out for signature first: the second waits, then finds it signed and leaves it.
+- **Notice days and signatories are kept.** Out of its draft a contract's notice days and signatories could still be
+  edited, although its body prints them and its signatories were approved. They are kept as its terms are. The
+  approval digest of contracts already approved is unchanged.
+- **Withdraw Approval.** An approved contract goes back to its draft, saying why, bound to no approval; changed, it is
+  approved again through Submit It.
+- **Approvals on any action, proven.** A workspace's policy on Send for Signature or Terminate It (Customize) makes
+  the action wait for its approvers and run once they approve. Both actions now have a contract saying what they do.
+
 ## 0.5.0
 
 Needs Ferrum 0.4.0 (apps' upkeep runs one workspace at a time, on whichever replica is free).
