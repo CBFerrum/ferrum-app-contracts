@@ -92,7 +92,13 @@ export function Home() {
         )}
         <Queue title={t("Obligations")} count={obligations.length} tone={late ? "attention" : "default"} more={{ to: "/e/Obligation", count: obligations.length - LIMIT }}>
           {obligations.slice(0, LIMIT).map((o) => (
-            <QueueItem key={o.id} to={`/e/Obligation/${o.id}`} title={isolate(String(o.description))} meta={t("due {day}", { day: day(o.due_on) })} trailing={o.overdue ? <Badge tone="red">{t("Overdue")}</Badge> : null} />
+            <QueueItem key={o.id} to={`/e/Obligation/${o.id}`} title={isolate(String(o.description))} meta={t("due {day}", { day: day(o.due_on) })} trailing={
+                <>
+                  {Number(o.repeat_months) > 0 && <Badge tone="neutral">{t("Repeats")}</Badge>}
+                  {o.overdue ? <Badge tone="red">{t("Overdue")}</Badge> : null}
+                </>
+              }
+            />
           ))}
         </Queue>
         {byStage(q.data.contracts).map(([stage, list]) => (

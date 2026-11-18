@@ -9,7 +9,7 @@
 //! version or a new contract; terminated saying why; obligations overdue and done; reports; confidential
 //! contracts read by three people as their roles say; and who may do what.
 
-use chrono::{Duration, Utc};
+use chrono::{Datelike, Duration, Utc};
 use ferrum_kernel::tenant::NewTenant;
 use ferrum_kernel::{Ctx, Db, DbConfig, Doc, Error, HookRegistry, Kernel, KernelSettings};
 use ferrum_meta::Catalog;
@@ -1169,4 +1169,106 @@ async fn scenario() {
     t.k.erase_personal_data(&t.admin, "asker@outside.test", "asked").await.expect("erased");
     let blank = t.get("Contract", request).await;
     assert!(blank["requested_by"].is_null() && blank["request_note"].is_null() && blank["title"] == "NDA for the demo", "{blank:?}");
+
+    // ───────────── obligations that repeat, and evidence before Done (CTR-07) ─────────────
+    let ends = day + Duration::days(365);
+    let duties = uid(&t
+        .insert(&cm, "Contract", json!({"title": "Managed duties", "counterparty_name": "Globex", "starts_on": day.to_string(), "ends_on": ends.to_string()}))
+        .await["id"]);
+    let duty = |what: &str, due: chrono::NaiveDate, extra: Value| {
+        let mut v = json!({"contract": duties.to_string(), "description": what, "owner": "ops@northwind.test", "due_on": due.to_string()});
+        v.as_object_mut().unwrap().extend(extra.as_object().cloned().unwrap_or_default());
+        v
+    };
+    let after = |o: Uuid| {
+        let k = k.clone();
+        async move {
+            let mut tx = k.db.tenant_tx(tenant).await.unwrap();
+            let rows: Vec<(Uuid, chrono::NaiveDate)> = sqlx::query_as("select id, due_on from e_obligation where tenant_id = $1 and previous = $2")
+                .bind(tenant)
+                .bind(o)
+                .fetch_all(&mut *tx)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+            rows
+        }
+    };
+    let months = |d: chrono::NaiveDate, n: u32| d.checked_add_months(chrono::Months::new(n)).unwrap();
+    // Obligations without a predecessor are not each other's duplicates.
+    t.insert(&cm, "Obligation", duty("Kick-off", day + Duration::days(3), json!({}))).await;
+    t.insert(&cm, "Obligation", duty("Handover", day + Duration::days(4), json!({}))).await;
+    // Evidence first.
+    let audited = uid(&t.insert(&cm, "Obligation", duty("Annual audit", day + Duration::days(30), json!({"evidence_required": true}))).await["id"]);
+    let r = t.set(&cm, "Obligation", audited, json!({"status": "Done"})).await;
+    assert!(matches!(&r, Err(Error::Validation(v)) if v.iter().any(|f| f.field == "evidence")), "done only with its evidence: {r:?}");
+    let minutes = k.store_file(&cm, Some(("Obligation", audited)), "audit.pdf", "application/pdf", &pdf("Audit", 1)).await.unwrap();
+    t.set(&cm, "Obligation", audited, json!({"status": "Done", "evidence": minutes["url"]})).await.expect("done with its evidence");
+    // Done, a repeating obligation makes the next, once, even when reopened and done again.
+    let first_due = day + Duration::days(10);
+    let review = uid(&t.insert(&cm, "Obligation", duty("Quarterly service review", first_due, json!({"repeat_months": 3}))).await["id"]);
+    t.set(&cm, "Obligation", review, json!({"status": "Done"})).await.unwrap();
+    let next = after(review).await;
+    assert_eq!(next.iter().map(|r| r.1).collect::<Vec<_>>(), [months(first_due, 3)], "done, it makes the next three months on");
+    let made = t.get("Obligation", next[0].0).await;
+    assert_eq!(
+        (made["status"].as_str(), made["owner"].as_str(), made["description"].as_str(), made["previous"].as_str()),
+        (Some("Open"), Some("ops@northwind.test"), Some("Quarterly service review"), Some(review.to_string().as_str()))
+    );
+    t.set(&cm, "Obligation", review, json!({"status": "Open"})).await.unwrap();
+    t.set(&cm, "Obligation", review, json!({"status": "Done"})).await.unwrap();
+    assert_eq!(after(review).await.len(), 1, "reopened and done again, it makes no second one");
+    // The day of the month is kept: from the 31st, the end of a shorter month, then the 31st again.
+    let jan31 = chrono::NaiveDate::from_ymd_opt(day.year() + 1, 1, 31).unwrap();
+    let monthly = uid(&t.insert(&cm, "Obligation", duty("Monthly report", jan31, json!({"repeat_months": 1}))).await["id"]);
+    t.set(&cm, "Obligation", monthly, json!({"status": "Done"})).await.unwrap();
+    let feb = after(monthly).await;
+    assert_eq!(feb[0].1, months(jan31, 1), "the end of February");
+    t.set(&cm, "Obligation", feb[0].0, json!({"status": "Done"})).await.unwrap();
+    assert_eq!(after(feb[0].0).await[0].1, chrono::NaiveDate::from_ymd_opt(day.year() + 1, 3, 31).unwrap(), "the 31st again");
+    // It stops at its last day, and at the contract's end.
+    let until = uid(&t
+        .insert(
+            &cm,
+            "Obligation",
+            duty("Until the launch", day + Duration::days(1), json!({"repeat_months": 1, "repeat_until": (day + Duration::days(20)).to_string()})),
+        )
+        .await["id"]);
+    t.set(&cm, "Obligation", until, json!({"status": "Done"})).await.unwrap();
+    assert!(after(until).await.is_empty(), "past its last day");
+    let last = uid(&t.insert(&cm, "Obligation", duty("Last month", ends - Duration::days(10), json!({"repeat_months": 1}))).await["id"]);
+    t.set(&cm, "Obligation", last, json!({"status": "Done"})).await.unwrap();
+    assert!(after(last).await.is_empty(), "past the contract's end");
+    refused(
+        t.k.insert(&cm, "Obligation", obj(duty("Backwards", day + Duration::days(9), json!({"repeat_months": 1, "repeat_until": day.to_string()})))).await,
+        "invalid",
+        "on or after the day it is due",
+    );
+    // An ended contract makes no more.
+    let ending = uid(&t
+        .insert(&cm, "Contract", json!({"title": "Ending soon", "counterparty_name": "Globex", "starts_on": day.to_string(), "ends_on": ends.to_string()}))
+        .await["id"]);
+    let orphan = uid(&t
+        .insert(
+            &cm,
+            "Obligation",
+            json!({"contract": ending.to_string(), "description": "Monthly call", "owner": "ops@northwind.test",
+                                          "due_on": (day + Duration::days(5)).to_string(), "repeat_months": 1}),
+        )
+        .await["id"]);
+    t.act(&cm, ending, "withdraw_contract", json!({"reason": "Never went ahead"})).await.unwrap();
+    t.set(&cm, "Obligation", orphan, json!({"status": "Done"})).await.unwrap();
+    assert!(after(orphan).await.is_empty(), "an ended contract makes no more");
+    // A missed one still brings the next, and two upkeeps at once make one.
+    let missed = uid(&t.insert(&cm, "Obligation", duty("Monthly check", day + Duration::days(2), json!({"repeat_months": 1}))).await["id"]);
+    let (a, b) = tokio::join!(
+        ferrum_app_contracts::maintenance_on(&k, tenant, day + Duration::days(3)),
+        ferrum_app_contracts::maintenance_on(&k, tenant, day + Duration::days(3))
+    );
+    a.unwrap();
+    b.unwrap();
+    assert_eq!(t.get("Obligation", missed).await["overdue"], true);
+    assert_eq!(after(missed).await.len(), 1, "a missed one still brings the next, once under two upkeeps");
+    // Who may mark it done: not a Contract Approver.
+    refused(t.set(&ca, "Obligation", missed, json!({"status": "Done"})).await, "forbidden", "");
 }

@@ -68,6 +68,18 @@ pub(crate) async fn upkeep(k: &Kernel, ctx: &Ctx, tx: &mut Tx, today: NaiveDate)
     for o in late {
         k.set_values_tx(ctx, tx, "Obligation", o, obj(json!({"overdue": true}))).await?;
     }
+    // A repeating obligation whose day has passed brings the next, done or not: one step per run.
+    let passed: Vec<Uuid> = sqlx::query_scalar(
+        "select o.id from e_obligation o where o.tenant_id = $1 and coalesce(o.repeat_months, 0) > 0 and o.due_on < $2 \
+         and not exists (select 1 from e_obligation n where n.tenant_id = o.tenant_id and n.previous = o.id) order by o.id for update of o",
+    )
+    .bind(ctx.tenant)
+    .bind(today)
+    .fetch_all(&mut **tx)
+    .await?;
+    for o in passed {
+        next(k, ctx, tx, o).await?;
+    }
     remind(k, ctx, tx, today).await
 }
 
@@ -194,6 +206,48 @@ pub(crate) async fn renew(hc: &mut HookCtx<'_>, doc: &Doc) -> Result<Value> {
     Ok(json!({"status": "Active", "ends_on": values["ends_on"]}))
 }
 
+/// The due day of the `n`th obligation after one first due on `first`, every `months` months: counted from the first,
+/// so the day of the month is kept whenever the month has it.
+pub(crate) fn next_due(first: NaiveDate, n: i64, months: i64) -> Option<NaiveDate> {
+    first.checked_add_months(Months::new(u32::try_from(n.checked_mul(months)?).ok()?))
+}
+
+/// The obligation that follows repeating obligation `obligation`, made once: none when it does not repeat, already has
+/// one, its contract has ended, or the next day is past its last day or the contract's end. Called under the
+/// obligation's row lock; the unique key on `previous` is the backstop.
+async fn next(k: &Kernel, ctx: &Ctx, tx: &mut Tx, obligation: Uuid) -> Result<()> {
+    let row: Option<(Uuid, Value, NaiveDate, Option<i64>, Option<NaiveDate>, Option<NaiveDate>, Option<i64>, Option<String>, Option<NaiveDate>)> =
+        sqlx::query_as(
+            "select o.contract, jsonb_build_object('description', o.description, 'kind', o.kind, 'party', o.party, 'owner', o.owner, \
+           'evidence_required', o.evidence_required), o.due_on, o.repeat_months::bigint, o.repeat_until, o.first_due_on, o.sequence::bigint, \
+           c.status, c.ends_on \
+         from e_obligation o left join e_contract c on c.tenant_id = o.tenant_id and c.id = o.contract \
+         where o.tenant_id = $1 and o.id = $2 and not exists (select 1 from e_obligation n where n.tenant_id = o.tenant_id and n.previous = o.id)",
+        )
+        .bind(ctx.tenant)
+        .bind(obligation)
+        .fetch_optional(&mut **tx)
+        .await?;
+    let Some((contract, copied, due_on, months, until, first, sequence, status, ends)) = row else { return Ok(()) };
+    let months = months.unwrap_or(0);
+    if months <= 0 || matches!(status.as_deref(), None | Some("Expired" | "Terminated" | "Withdrawn")) {
+        return Ok(());
+    }
+    let first = first.unwrap_or(due_on);
+    let n = sequence.unwrap_or(0) + 1;
+    let Some(due) = next_due(first, n, months) else { return Ok(()) };
+    if until.or(ends).is_none_or(|last| due > last) {
+        return Ok(());
+    }
+    let mut values = obj(copied);
+    values.extend(obj(json!({
+        "contract": contract.to_string(), "due_on": due.to_string(), "repeat_months": months, "repeat_until": until.map(|d| d.to_string()),
+        "previous": obligation.to_string(), "first_due_on": first.to_string(), "sequence": n,
+    })));
+    k.insert_tx(ctx, tx, "Obligation", values).await?;
+    Ok(())
+}
+
 pub struct ObligationHook;
 
 #[async_trait]
@@ -216,5 +270,40 @@ impl DocHook for ObligationHook {
             doc.insert("done_on".into(), Value::Null);
         }
         Ok(())
+    }
+
+    async fn validate(&self, _hc: &mut HookCtx<'_>, doc: &Doc) -> Result<()> {
+        if s(doc, "status") == Some("Done") && doc.get("evidence_required").and_then(Value::as_bool) == Some(true) && s(doc, "evidence").is_none() {
+            return Err(Error::field("evidence", "it is done with its evidence attached"));
+        }
+        if let (Some(until), Some(due)) = (s(doc, "repeat_until"), s(doc, "due_on"))
+            && until < due
+        {
+            return Err(Error::field("repeat_until", "is on or after the day it is due"));
+        }
+        Ok(())
+    }
+
+    /// Done for the first time since it was open, a repeating obligation brings the next.
+    async fn after_save(&self, hc: &mut HookCtx<'_>, doc: &Doc, old: Option<&Doc>) -> Result<()> {
+        if s(doc, "status") != Some("Done") || old.is_some_and(|o| s(o, "status") == Some("Done")) {
+            return Ok(());
+        }
+        let Some(obligation) = id(doc, "id") else { return Ok(()) };
+        next(hc.kernel, &elevated(hc.ctx), hc.tx, obligation).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_day_of_the_month_is_kept() {
+        let d = |y, m, d| NaiveDate::from_ymd_opt(y, m, d).unwrap();
+        assert_eq!(next_due(d(2027, 1, 31), 1, 1), Some(d(2027, 2, 28)));
+        assert_eq!(next_due(d(2027, 1, 31), 2, 1), Some(d(2027, 3, 31)));
+        assert_eq!(next_due(d(2027, 11, 30), 1, 3), Some(d(2028, 2, 29)));
+        assert_eq!(next_due(d(2027, 1, 31), -1, 1), None, "never backwards");
     }
 }

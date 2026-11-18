@@ -282,4 +282,14 @@
     - {name: done_on, type: date, read_only: true, no_copy: true}
     - {name: overdue, type: check, read_only: true, no_copy: true, in_list: true, in_filter: true}
     - {name: reminded_for, type: date, read_only: true, hidden: true, no_copy: true}
+    - {name: repeat_months, type: int, default: 0, min: 0, max: 120, label: Repeats Every (Months), description: "1 monthly, 3 quarterly, 12 yearly; 0: once"}
+    - {name: repeat_until, type: date, description: "The last day one is due; empty: the contract's end"}
+    - {name: evidence_required, type: check, in_filter: true, description: "It is done only with its evidence attached"}
+    - {name: evidence, type: attach, description: "The file that shows it was done"}
+    - {name: evidence_note, type: text}
+    - {name: previous, type: link, to: Obligation, read_only: true, no_copy: true, description: "The one this follows"}
+    - {name: first_due_on, type: date, read_only: true, hidden: true, no_copy: true}
+    - {name: sequence, type: int, default: 0, read_only: true, hidden: true, no_copy: true}
+  # At most one obligation follows another (nulls are distinct: a first one follows nothing).
+  unique: [[previous]]
   list: {columns: [contract, description, owner, due_on, status, overdue], sort: due_on asc}

@@ -18,6 +18,10 @@ const contracts = [
   { id: "c1", title: "NDA for the demo", status: "Draft", requested_by: "asker@example.test", owner: null, counterparty_name: "Initech" },
   { id: "c2", title: "Support plan", status: "Draft", owner: "cm@example.test", counterparty_name: "Globex" },
 ];
+const obligations = [
+  { id: "o1", description: "Quarterly service review", status: "Open", due_on: "2026-12-01", repeat_months: 3 },
+  { id: "o2", description: "Deliver the audit report", status: "Open", due_on: "2026-12-02", repeat_months: 0 },
+];
 
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -30,6 +34,7 @@ beforeEach(() => {
       if (path === "/api/auth/me") return json(me);
       if (path === "/api/meta") return json({ entities: [], modules: [] });
       if (path === "/api/v1/Contract") return json({ rows: contracts, total: contracts.length });
+      if (path === "/api/v1/Obligation") return json({ rows: obligations, total: obligations.length });
       if (path.startsWith("/api/v1/")) return json({ rows: [], total: 0 });
       return json({ error: "not found" }, 404);
     }),
@@ -68,5 +73,11 @@ describe("the home page", () => {
     expect(q["Requests"]).not.toContain("Support plan");
     expect(q["In the works"]).toContain("Support plan");
     expect(q["In the works"]).not.toContain("NDA for the demo");
+  });
+
+  it("marks a repeating obligation", async () => {
+    const q = await queues("/");
+    expect(q["Obligations"]).toMatch(/Quarterly service review.*Repeats/);
+    expect(q["Obligations"]).not.toMatch(/Deliver the audit report.*Repeats/);
   });
 });
