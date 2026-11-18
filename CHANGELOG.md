@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.0
+
+Needs Ferrum 0.4.0 (apps' upkeep runs one workspace at a time, on whichever replica is free).
+
+- **Upkeep is one workspace's.** `maintenance(k, tenant)` and `maintenance_on(k, tenant, today)` follow approvals and signatures, move terms on, mark obligations overdue and send reminders for the workspace the platform hands them; the list of workspaces and the installation check are the platform's.
+
+No database or interface change.
+
 ## 0.4.3
 
 Server only. Needs the same platform as 0.4.2. No interface or database change.

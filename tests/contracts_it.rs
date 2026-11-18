@@ -273,7 +273,7 @@ async fn scenario() {
     // it: only whoever submitted it asks again.
     refused(t.act(&cm, big, "approve", Value::Null).await, "invalid", "only by whoever submitted it");
     assert_eq!(t.status(big).await, "In Review", "nothing asked, nothing approved");
-    ferrum_app_contracts::maintenance_on(&k, today).await.unwrap();
+    ferrum_app_contracts::maintenance_on(&k, tenant, today).await.unwrap();
     assert_eq!(
         (t.status(big).await, t.get("Contract", big).await["decision_note"].as_str().map(str::to_string)),
         ("Draft".to_string(), Some("Cap the liability".to_string()))
@@ -373,10 +373,10 @@ async fn scenario() {
         request["signers"].as_array().unwrap().iter().map(|s| (s["email"].as_str().unwrap().to_string(), s["signing_order"].as_i64().unwrap())).collect();
     assert_eq!(signers, [("legal@globex.test".to_string(), 1), ("nora@northwind.test".to_string(), 2)], "the counterparty first, then the organisation");
     assert!(request["fields"].as_array().unwrap().iter().all(|f| f["page"] == 3), "signatures on the last page");
-    ferrum_app_contracts::maintenance_on(&k, today).await.unwrap();
+    ferrum_app_contracts::maintenance_on(&k, tenant, today).await.unwrap();
     assert_eq!(t.status(signed_one).await, "Out for Signature", "waiting while Sign waits");
     t.sign_ends(uid(&c["sign_request"]), "Completed").await;
-    ferrum_app_contracts::maintenance_on(&k, today).await.unwrap();
+    ferrum_app_contracts::maintenance_on(&k, tenant, today).await.unwrap();
     let c = t.get("Contract", signed_one).await;
     assert_eq!(c["status"], "Active", "signed, and active from its start");
     // The contract keeps a copy of the sealed PDF of its own: an approver, who may not read Sign's
@@ -401,7 +401,7 @@ async fn scenario() {
     t.act(&cm, nda, "submit_contract", Value::Null).await.unwrap();
     t.act(&cm, nda, "send_for_signature", Value::Null).await.unwrap();
     t.sign_ends(uid(&t.get("Contract", nda).await["sign_request"]), "Declined").await;
-    ferrum_app_contracts::maintenance_on(&k, today).await.unwrap();
+    ferrum_app_contracts::maintenance_on(&k, tenant, today).await.unwrap();
     let back = t.get("Contract", nda).await;
     assert_eq!((back["status"].as_str(), back["decision_note"].as_str()), (Some("Approved"), Some("The signature request was declined: send it again")));
 
@@ -417,9 +417,9 @@ async fn scenario() {
     t.act(&cm, future, "submit_contract", Value::Null).await.unwrap();
     t.act(&cm, future, "send_for_signature", Value::Null).await.unwrap();
     t.sign_ends(uid(&t.get("Contract", future).await["sign_request"]), "Completed").await;
-    ferrum_app_contracts::maintenance_on(&k, today).await.unwrap();
+    ferrum_app_contracts::maintenance_on(&k, tenant, today).await.unwrap();
     assert_eq!(t.status(future).await, "Signed", "signed, not yet started");
-    ferrum_app_contracts::maintenance_on(&k, today + Duration::days(30)).await.unwrap();
+    ferrum_app_contracts::maintenance_on(&k, tenant, today + Duration::days(30)).await.unwrap();
     assert_eq!(t.status(future).await, "Active");
     // Renewing by itself: notice falls due before the end, then a new term.
     let mut tx = k.db.tenant_tx(tenant).await.unwrap();
@@ -430,16 +430,16 @@ async fn scenario() {
         .await
         .unwrap();
     tx.commit().await.unwrap();
-    ferrum_app_contracts::maintenance_on(&k, today + Duration::days(300)).await.unwrap();
+    ferrum_app_contracts::maintenance_on(&k, tenant, today + Duration::days(300)).await.unwrap();
     assert_eq!(t.get("Contract", signed_one).await["notice_due"], false, "65 days before its end");
-    ferrum_app_contracts::maintenance_on(&k, today + Duration::days(340)).await.unwrap();
+    ferrum_app_contracts::maintenance_on(&k, tenant, today + Duration::days(340)).await.unwrap();
     assert_eq!(t.get("Contract", signed_one).await["notice_due"], true, "25 days before its end");
-    ferrum_app_contracts::maintenance_on(&k, today + Duration::days(370)).await.unwrap();
+    ferrum_app_contracts::maintenance_on(&k, tenant, today + Duration::days(370)).await.unwrap();
     let renewed = t.get("Contract", signed_one).await;
     let next_end = (today + Duration::days(365)).checked_add_months(chrono::Months::new(12)).unwrap().to_string();
     assert_eq!((renewed["status"].as_str(), renewed["renewals"].as_i64(), renewed["ends_on"].as_str()), (Some("Active"), Some(1), Some(next_end.as_str())));
     assert_eq!(renewed["notice_due"], false, "a new term, and its notice far off");
-    ferrum_app_contracts::maintenance_on(&k, today + Duration::days(450)).await.unwrap();
+    ferrum_app_contracts::maintenance_on(&k, tenant, today + Duration::days(450)).await.unwrap();
     assert_eq!(t.status(future).await, "Expired", "no renewal: it ends");
     refused(t.act(&cm, signed_one, "terminate_contract", Value::Null).await, "invalid", "says why");
     t.act(&cm, signed_one, "terminate_contract", json!({"reason": "Globex was acquired"})).await.unwrap();
@@ -449,7 +449,7 @@ async fn scenario() {
     let ob = |what: &str, due: String| json!({"contract": signed_one.to_string(), "description": what, "owner": "cm@northwind.test", "due_on": due});
     let o1 = uid(&t.insert(&cm, "Obligation", ob("Quarterly service review", (today + Duration::days(90)).to_string())).await["id"]);
     let o2 = uid(&t.insert(&cm, "Obligation", ob("Annual security report", (today + Duration::days(200)).to_string())).await["id"]);
-    ferrum_app_contracts::maintenance_on(&k, today + Duration::days(100)).await.unwrap();
+    ferrum_app_contracts::maintenance_on(&k, tenant, today + Duration::days(100)).await.unwrap();
     assert_eq!((t.get("Obligation", o1).await["overdue"].as_bool(), t.get("Obligation", o2).await["overdue"].as_bool()), (Some(true), Some(false)));
     t.set(&cm, "Obligation", o1, json!({"status": "Done"})).await.unwrap();
     let done = t.get("Obligation", o1).await;
@@ -582,23 +582,23 @@ async fn scenario() {
             n
         }
     };
-    let (a, b) = tokio::join!(ferrum_app_contracts::maintenance_on(&k, today), ferrum_app_contracts::maintenance_on(&k, today));
+    let (a, b) = tokio::join!(ferrum_app_contracts::maintenance_on(&k, tenant, today), ferrum_app_contracts::maintenance_on(&k, tenant, today));
     a.unwrap();
     b.unwrap();
     assert_eq!(sends(soon, "contracts.obligation_due").await, 2, "its owner and the contract's, once each");
-    ferrum_app_contracts::maintenance_on(&k, today + Duration::days(1)).await.unwrap();
+    ferrum_app_contracts::maintenance_on(&k, tenant, today + Duration::days(1)).await.unwrap();
     assert_eq!(sends(soon, "contracts.obligation_due").await, 2, "not again");
     // The contract signed on paper does not renew: its owner hears before it ends, once.
-    ferrum_app_contracts::maintenance_on(&k, today + Duration::days(355)).await.unwrap();
-    ferrum_app_contracts::maintenance_on(&k, today + Duration::days(356)).await.unwrap();
+    ferrum_app_contracts::maintenance_on(&k, tenant, today + Duration::days(355)).await.unwrap();
+    ferrum_app_contracts::maintenance_on(&k, tenant, today + Duration::days(356)).await.unwrap();
     assert_eq!(sends(wet, "contracts.ending").await, 1);
 
     // ───────────── renewal as a new version, or as a new contract (DC-75) ─────────────
     t.set(&cm, "ContractType", kind, json!({"renewal": "New Version"})).await.unwrap();
     let wet_end = t.get("Contract", wet).await["ends_on"].as_str().unwrap().to_string();
-    ferrum_app_contracts::maintenance_on(&k, today + Duration::days(400)).await.unwrap();
+    ferrum_app_contracts::maintenance_on(&k, tenant, today + Duration::days(400)).await.unwrap();
     assert_eq!(t.status(wet).await, "Expired", "it did not renew by itself");
-    ferrum_app_contracts::maintenance_on(&k, today + Duration::days(401)).await.unwrap();
+    ferrum_app_contracts::maintenance_on(&k, tenant, today + Duration::days(401)).await.unwrap();
     assert_eq!(t.status(wet).await, "Expired", "expired once, and stays");
     t.act(&cm, wet, "renew_contract", Value::Null).await.expect("renewed");
     let again = t.get("Contract", wet).await;
@@ -681,7 +681,7 @@ async fn scenario() {
     t.act(&cm, late, "submit_contract", Value::Null).await.unwrap();
     t.act(&cm, late, "send_for_signature", Value::Null).await.unwrap();
     t.sign_ends(uid(&t.get("Contract", late).await["sign_request"]), "Completed").await;
-    ferrum_app_contracts::maintenance(&k).await.unwrap();
+    ferrum_app_contracts::maintenance(&k, tenant).await.unwrap();
     assert_eq!(t.get("Contract", late).await["signed_on"], json!(day.to_string()), "signed on the workspace's day of Sign's moment");
     let finished = uid(&t.insert(&cm, "Obligation", ob("Kick-off held", day.to_string())).await["id"]);
     t.set(&cm, "Obligation", finished, json!({"status": "Done"})).await.unwrap();
@@ -689,7 +689,7 @@ async fn scenario() {
     // Upkeep's day is each workspace's own: due yesterday there is overdue, due today there is not.
     let yesterday = uid(&t.insert(&cm, "Obligation", ob("Due yesterday", (day - Duration::days(1)).to_string())).await["id"]);
     let due_today = uid(&t.insert(&cm, "Obligation", ob("Due today", day.to_string())).await["id"]);
-    ferrum_app_contracts::maintenance(&k).await.unwrap();
+    ferrum_app_contracts::maintenance(&k, tenant).await.unwrap();
     assert_eq!(
         (t.get("Obligation", yesterday).await["overdue"].as_bool(), t.get("Obligation", due_today).await["overdue"].as_bool()),
         (Some(true), Some(false)),
