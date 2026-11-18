@@ -3,6 +3,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { api, docPath, formatValue, t, isolate } from "@ferrum/client";
+import { can, useEntityMeta } from "@ferrum/records";
 import { Badge, ButtonLink, HomeSkeleton, LoadFailed, PageHead, PageStack, Queue, QueueGrid, QueueItem, StatusBadge, useShellTitle } from "@ferrum/kit";
 
 export interface Row {
@@ -47,6 +48,7 @@ const LIMIT = 5;
 
 export function Home() {
   useShellTitle(t("Contracts"));
+  const meta = useEntityMeta("Contract");
   const q = useQuery({
     queryKey: ["contracts", "home"],
     queryFn: async () => {
@@ -55,9 +57,12 @@ export function Home() {
     },
   });
   const create = (
-    <ButtonLink to="/e/Contract/new" variant="primary" icon="plus">
-      {t("New contract")}
-    </ButtonLink>
+    <>
+      {can(meta.data?.permissions, "import") && <ButtonLink to="/signed-copies">{t("Bring in signed contracts")}</ButtonLink>}
+      <ButtonLink to="/e/Contract/new" variant="primary" icon="plus">
+        {t("New contract")}
+      </ButtonLink>
+    </>
   );
   if (q.isPending) return (
     <PageStack>

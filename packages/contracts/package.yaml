@@ -26,7 +26,7 @@ roles:
       - {entity: ContractType, read: true, write: true, create: true}
       - {entity: Contract, read: true, write: true, create: true, export: true, import: true, where: {confidential: false}}
       - {entity: Contract, read: true, write: true, create: true, if_owner: true}
-      - {entity: Obligation, read: true, write: true, create: true, export: true}
+      - {entity: Obligation, read: true, write: true, create: true, export: true, import: true}
       - {entity: SignRequest, read: true}
   - name: Contract Approver
     description: Approves or sends back contracts as the approval policy asks, and approves clauses. Reads a confidential contract only when they own it, are among its readers, or are asked to approve it.
@@ -42,7 +42,7 @@ roles:
       - {entity: Contract, read: true, write: true, create: true, export: true, import: true}
       - {entity: Clause, read: true}
       - {entity: ContractType, read: true}
-      - {entity: Obligation, read: true, write: true, create: true, export: true}
+      - {entity: Obligation, read: true, write: true, create: true, export: true, import: true}
 
 # Approval by policy (docs/api.md, "Approvals"): Submit It runs the hidden action Approve It as whoever submitted,
 # which asks Legal first when the contract departs from its type's playbook (deviation_score above zero), then a

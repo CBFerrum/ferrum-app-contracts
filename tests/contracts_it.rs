@@ -1387,4 +1387,106 @@ async fn scenario() {
     t.set(&cm, "Contract", under, json!({"master": base.to_string()})).await.expect("under a master");
     let listed = t.k.list(&cm, "Contract", &lq(ferrum_kernel::query::Filter::eq("master", base.to_string()))).await.unwrap().rows;
     assert!(listed.iter().any(|r| r["id"] == json!(under.to_string())), "listed under its master");
+
+    // ───────────── contracts signed before, created signed, many at a time (CTR-12) ─────────────
+    let upload = |who: &Ctx, name: &str| {
+        let (k, who, name) = (k.clone(), who.clone(), name.to_string());
+        async move { k.store_file(&who, None, &name, "application/pdf", &pdf(&name, 1)).await.unwrap()["url"].as_str().unwrap().to_string() }
+    };
+    let loose = |url: String| {
+        let k = k.clone();
+        async move {
+            let id: Uuid = url.rsplit('/').next().unwrap().parse().unwrap();
+            let mut tx = k.db.tenant_tx(tenant).await.unwrap();
+            let on: (Option<String>, Option<Uuid>) = sqlx::query_as("select entity, record_id from file_object where tenant_id = $1 and id = $2")
+                .bind(tenant)
+                .bind(id)
+                .fetch_one(&mut *tx)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+            on
+        }
+    };
+    let before = |title: &str, url: &str, on: Option<String>| {
+        let mut v = json!({"title": title, "counterparty_name": "Initech", "starts_on": day.to_string(), "ends_on": (day + Duration::days(365)).to_string(),
+                           "recorded_copy": url, "recorded_signed_by": "Bill for Initech; Nora for us"});
+        if let Some(on) = on {
+            v["recorded_signed_on"] = json!(on);
+        }
+        v
+    };
+    let signed_on = (day - Duration::days(30)).to_string();
+    // A contract signed before is created signed, its copy attached to it.
+    let old_copy = upload(&legal, "old-msa.pdf").await;
+    let made = t.k.insert(&legal, "Contract", obj(before("Old MSA", &old_copy, Some(signed_on.clone())))).await.expect("created signed");
+    let old = uid(&made["id"]);
+    let got = t.get("Contract", old).await;
+    assert_eq!(
+        (got["status"].as_str(), got["signed_document"].as_str(), got["signed_elsewhere"].as_bool(), got["signed_on"].as_str()),
+        (Some("Signed"), Some(old_copy.as_str()), Some(true), Some(signed_on.as_str())),
+        "a contract signed before is created signed"
+    );
+    assert_eq!(loose(old_copy.clone()).await, (Some("Contract".to_string()), Some(old)), "its copy is attached to it");
+    ferrum_app_contracts::maintenance_on(&k, tenant, day).await.unwrap();
+    assert_eq!(t.status(old).await, "Active");
+    // An import brings in many; a refused row keeps no file on a contract; one file, one contract.
+    let (a, b, c, d) = (upload(&legal, "a.pdf").await, upload(&legal, "b.pdf").await, upload(&legal, "c.pdf").await, upload(&legal, "d.pdf").await);
+    let rows = vec![
+        before("Imported A", &a, Some(signed_on.clone())),
+        before("Imported B", &b, Some(signed_on.clone())),
+        before("Imported C", &c, Some(signed_on.clone())),
+        before("Imported D", &d, None),
+        before("Imported A again", &a, Some(signed_on.clone())),
+    ];
+    let (ids, errors) = t.k.import_rows(&legal, "Contract", &rows).await.expect("imported");
+    assert_eq!(ids.len(), 3, "three good rows: {errors:?}");
+    assert_eq!(errors.len(), 2, "{errors:?}");
+    assert_eq!(errors[0]["row"], 3);
+    assert!(errors[0].to_string().contains("recorded_signed_on"), "{errors:?}");
+    assert_eq!(errors[1]["row"], 4, "one file, one contract: {errors:?}");
+    assert_eq!(loose(d).await, (None, None), "a refused row keeps no file on a contract");
+    for id in &ids {
+        assert_eq!(t.get("Contract", uid(id)).await["status"], "Signed");
+    }
+    // Who may: not a Contract Manager; without the three fields, a draft as before.
+    let theirs = upload(&cm, "cm.pdf").await;
+    refused(t.k.insert(&cm, "Contract", obj(before("By a manager", &theirs, Some(signed_on.clone())))).await, "forbidden", "Contract Approver or Legal");
+    let plain = t
+        .insert(
+            &cm,
+            "Contract",
+            json!({"title": "Plain draft", "counterparty_name": "Initech", "starts_on": day.to_string(),
+                                                 "ends_on": (day + Duration::days(365)).to_string()}),
+        )
+        .await;
+    assert_eq!(plain["status"], "Draft");
+    // A draft is not signed by editing.
+    refused(
+        t.set(&cm, "Contract", uid(&plain["id"]), json!({"recorded_copy": theirs, "recorded_signed_by": "x", "recorded_signed_on": signed_on})).await,
+        "invalid",
+        "recorded when the contract is created",
+    );
+    // Someone else's upload is refused, and no contract is left.
+    refused(t.k.insert(&legal, "Contract", obj(before("Not theirs", &theirs, Some(signed_on.clone())))).await, "not found", "");
+    assert_eq!(loose(theirs.clone()).await, (None, None));
+    // The system (a form) cannot record a signed copy.
+    let spare = upload(&legal, "spare.pdf").await;
+    let system = Ctx::system(tenant, k.registry.schema(tenant).await.unwrap());
+    refused(t.k.insert(&system, "Contract", obj(before("By a form", &spare, Some(signed_on.clone())))).await, "forbidden", "recorded by a person");
+    let mut tx = k.db.tenant_tx(tenant).await.unwrap();
+    let none: i64 = sqlx::query_scalar("select count(*) from e_contract where tenant_id = $1 and title in ('Not theirs', 'By a form', 'By a manager')")
+        .bind(tenant)
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    assert_eq!(none, 0, "no contract left by a refused create");
+    // Obligations come in from a sheet.
+    let sheet = vec![
+        json!({"contract": old.to_string(), "description": "Annual price review", "owner": "ops@northwind.test", "due_on": (day + Duration::days(60)).to_string()}),
+        json!({"contract": old.to_string(), "description": "Insurance certificate", "owner": "ops@northwind.test", "due_on": (day + Duration::days(90)).to_string()}),
+    ];
+    let (made, failed) = t.k.import_rows(&cm, "Obligation", &sheet).await.expect("obligations imported");
+    assert_eq!((made.len(), failed.len()), (2, 0), "{failed:?}");
 }

@@ -169,6 +169,9 @@
     - {name: applied_on, type: date, read_only: true, no_copy: true, description: "The day its changes took effect on the contract it amends"}
     - {name: amendments, type: int, default: 0, read_only: true, no_copy: true, description: "How many amendments have taken effect"}
     - {name: master, type: link, to: Contract, in_filter: true, description: "The master agreement this contract is made under"}
+    - {name: recorded_copy, type: data, max_length: 100, no_copy: true, label: Signed Copy (Uploaded), description: "For a contract signed before: the /files/<id> path of its signed copy, uploaded by whoever creates it. With Signed By and Signed On it is created Signed"}
+    - {name: recorded_signed_by, type: text, no_copy: true, label: Signed By, description: "Who signed it, on each side: names people"}
+    - {name: recorded_signed_on, type: date, no_copy: true, label: Signed On (Recorded)}
   indexes: [[amends]]
   actions:
     - name: amend_contract
@@ -239,6 +242,10 @@
         - {name: signed_file, type: data, label: Signed Copy, required: true, description: "The uploaded signed PDF (its /files/<id> path)"}
         - {name: signed_by, type: text, label: Signed By, required: true, description: "Who signed it, on each side"}
         - {name: signed_on, type: date, label: Signed On, required: true}
+      contract:
+        effect: transactional_action
+        completion: "The contract is Signed with a copy of the uploaded file as its signed document, marked signed elsewhere with who signed and when"
+        returns: {type: object, properties: {status: {type: string, const: Signed}}}
     - name: renew_contract
       label: Renew It
       permission: write

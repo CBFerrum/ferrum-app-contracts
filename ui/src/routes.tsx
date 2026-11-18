@@ -42,6 +42,7 @@ export const routes: RouteObject[] = [
     errorElement: <RouteError />,
     children: [
       { index: true, lazy: () => import("./Home").then((m) => ({ Component: m.Home })) },
+      { path: "signed-copies", lazy: () => import("./SignedCopies").then((m) => ({ Component: m.SignedCopies })) },
       { path: "e/:entity", lazy: page("ListView") },
       { path: "e/:entity/:id", lazy: page("FormView") },
       { path: "r/:name", lazy: page("ReportView") },

@@ -327,6 +327,20 @@ pub(crate) async fn follow_approvals(k: &Kernel, ctx: &Ctx, tx: &mut Tx) -> Resu
     Ok(())
 }
 
+/// The values of a contract signed elsewhere: its copy at `url`, signed on `on` by `by`, recorded by `recorder`.
+fn signed_elsewhere(url: &str, on: NaiveDate, by: &str, recorder: &str) -> Value {
+    json!({"status": "Signed", "signed_document": url, "signed_on": on.to_string(), "signed_elsewhere": true, "signed_elsewhere_by": by,
+           "decision_note": format!("Signed elsewhere, recorded by {recorder}")})
+}
+
+/// The fields a create carries for a contract signed before: its uploaded copy, who signed and when.
+const RECORDED: [&str; 3] = ["recorded_copy", "recorded_signed_by", "recorded_signed_on"];
+
+/// May someone record a contract signed elsewhere without its approval: a Contract Approver, Legal or an administrator.
+fn records_signed(ctx: &Ctx) -> bool {
+    approver(ctx) || ctx.roles.iter().any(|r| r == "Legal")
+}
+
 pub struct ContractHook;
 
 #[async_trait]
@@ -432,10 +446,22 @@ impl DocHook for ContractHook {
     /// A request from a form (who asked, no owner) is made known to Legal and, unless it is confidential, to the Contract
     /// Managers, once, as it arrives.
     async fn after_save(&self, hc: &mut HookCtx<'_>, doc: &Doc, old: Option<&Doc>) -> Result<()> {
-        if old.is_some() || s(doc, "requested_by").is_none() || s(doc, "owner").is_some() {
+        if old.is_some() {
             return Ok(());
         }
         let contract = id(doc, "id").ok_or_else(|| Error::internal("a contract without an id"))?;
+        // Created signed: the copy, the creator's own loose upload, is attached to it in this transaction (another's, or
+        // one already on a record, is not found and nothing is kept), and the contract is Signed.
+        if let (Some(file), Some(by), Some(on)) =
+            (file_of(doc, "recorded_copy"), s(doc, "recorded_signed_by"), s(doc, "recorded_signed_on").and_then(|d| d.get(..10)?.parse::<NaiveDate>().ok()))
+        {
+            hc.kernel.attach_file_tx(hc.ctx, hc.tx, file, "Contract", contract).await?;
+            let values = signed_elsewhere(&format!("/files/{file}"), on, by, &hc.ctx.email);
+            hc.kernel.set_values_tx(&elevated(hc.ctx), hc.tx, "Contract", contract, obj(values)).await?;
+        }
+        if s(doc, "requested_by").is_none() || s(doc, "owner").is_some() {
+            return Ok(());
+        }
         let roles: &[&str] = if doc.get("confidential").and_then(Value::as_bool) == Some(true) { &["Legal"] } else { &["Legal", "Contract Manager"] };
         // ponytail: the people holding a role read here, as Edge and Comms do; Kernel::role_holders when the platform has it.
         let people: Vec<Uuid> = sqlx::query_scalar(
@@ -461,8 +487,32 @@ impl DocHook for ContractHook {
     }
 
     async fn validate_change(&self, hc: &mut HookCtx<'_>, old: Option<&Doc>, doc: &Doc) -> Result<()> {
+        let given: Vec<&str> = RECORDED.into_iter().filter(|f| s(doc, f).is_some()).collect();
+        // A contract signed before is created signed by a person who may record it, with all three, the copy their upload.
+        if old.is_none() && !given.is_empty() {
+            if hc.ctx.is_system {
+                return Err(Error::Forbidden("a contract signed elsewhere is recorded by a person".into()));
+            }
+            if let Some(missing) = RECORDED.into_iter().find(|f| !given.contains(f)) {
+                return Err(Error::field(missing, "a contract signed before has its copy, who signed it and the day"));
+            }
+            if file_of(doc, "recorded_copy").is_none() || !s(doc, "recorded_copy").is_some_and(|u| u.starts_with("/files/")) {
+                return Err(Error::field("recorded_copy", "is the uploaded signed copy's /files/<id> path"));
+            }
+            if s(doc, "recorded_signed_on").and_then(|d| d.get(..10)?.parse::<NaiveDate>().ok()).is_none_or(|on| on > hc.ctx.today()) {
+                return Err(Error::field("recorded_signed_on", "is today or before"));
+            }
+            if !records_signed(hc.ctx) {
+                return Err(Error::Forbidden("a contract signed elsewhere is recorded by a Contract Approver or Legal".into()));
+            }
+        }
         if hc.ctx.is_system {
             return Ok(());
+        }
+        if let Some(o) = old
+            && RECORDED.into_iter().any(|f| s(o, f) != s(doc, f))
+        {
+            return Err(Error::invalid("a signed copy is recorded when the contract is created, or with Record Signed Copy"));
         }
         if let Some(o) = old
             && !matches!(s(o, "status"), Some("Draft") | None)
@@ -529,7 +579,7 @@ impl DocHook for ContractHook {
             }
             "record_signed_copy" => {
                 // Recording one never approved is for those who may approve: an import of contracts signed before.
-                if s(doc, "status") == Some("Draft") && !approver(hc.ctx) && !hc.ctx.roles.iter().any(|r| r == "Legal") {
+                if s(doc, "status") == Some("Draft") && !records_signed(hc.ctx) {
                     return Err(Error::Forbidden("a contract signed elsewhere is recorded from its draft by a Contract Approver or Legal".into()));
                 }
                 let file = note("signed_file")
@@ -542,8 +592,7 @@ impl DocHook for ContractHook {
                 // A copy of the contract's own, read by whoever reads the contract; the caller must be able to read it.
                 // ponytail: copy_file commits on its own; a refused action after it leaves a copy on the contract.
                 let copy = hc.kernel.copy_file(hc.ctx, file, Some(("Contract", contract))).await?;
-                json!({"status": "Signed", "signed_document": copy.get("url"), "signed_on": on.to_string(), "signed_elsewhere": true,
-                       "signed_elsewhere_by": by, "decision_note": format!("Signed elsewhere, recorded by {}", hc.ctx.email)})
+                signed_elsewhere(copy.get("url").and_then(Value::as_str).unwrap_or_default(), on, &by, &hc.ctx.email)
             }
             "renew_contract" => return crate::term::renew(hc, doc).await.map(Some),
             // On the contract's row lock: one amendment under way at a time, each starting from the terms in force.
