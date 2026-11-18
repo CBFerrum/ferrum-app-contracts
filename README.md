@@ -269,7 +269,8 @@ governs.
 | **Contracts Ending or Renewing** | Contracts ending or renewing in a period. |
 | **Obligations Due** | Obligations due up to a date. |
 | **Days from Draft to Signed** | Cycle time of contracts signed in a period. |
-| **CSV import** | Import contracts as drafts (title, counterparty, dates, value, type, `confidential`) as Contract Manager or Legal, then upload each signed copy and Record Signed Copy on it. |
+| **CSV import** | Import contracts as drafts (title, counterparty, dates, value, type, `confidential`) as Contract Manager or Legal. Contract Manager and Legal import obligations too. |
+| **Contracts signed before** | A Contract Approver or Legal creates a contract already Signed with three fields: Signed Copy (Uploaded) (their own upload's `/files/<id>`), Signed By (names people) and Signed On. In bulk, two steps: on Signed copies (`/contracts/signed-copies`, "Bring in signed contracts") upload the PDFs and download a sheet with one row per file; complete it and import it from the Contracts list. Each row is created Signed with its copy attached, goes Active on its start day, and a refused row keeps no file. |
 | **Export** | Contract Manager and Legal export contracts. Obligations can be exported too. |
 | **Print** | Print a contract with its type's template. |
 
@@ -411,7 +412,7 @@ Compared with five contract lifecycle management products: Ironclad, DocuSign CL
 | AI reads a contract and fills its fields | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | AI review against a playbook | ❌ | ✅ | 🟡 | ✅ | 🟡 | ✅ |
 | Confidential contracts by owner, reader and role | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Import existing contracts in bulk | 🟡⁵ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Import existing contracts in bulk | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Reports and dashboards | 🟡⁶ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Counterparty portal | ❌ | ✅ | 🟡 | 🟡 | 🟡 | ✅ |
 | Same data set as CRM, orders, projects and accounts | ✅ | 🟡 | 🟡 | 🟡 | 🟡 | 🟡 |
@@ -423,7 +424,6 @@ Compared with five contract lifecycle management products: Ironclad, DocuSign CL
 ² Redlining through Word or a companion editor rather than a browser editor, as far as public product pages say.
 ³ Through Ferrum's Sign app, installed with Contracts, not inside Contracts itself.
 ⁴ Through integrations with external e-signature products as well as, in some cases, their own.
-⁵ CSV of contracts as drafts, then each signed copy is uploaded and recorded one by one.
 ⁶ Four reports. Studio queries and dashboards can be added; no contract dashboard ships.
 ⁷ The approval policy is editable in Customize; the lifecycle states are fixed in code.
 ⁸ Agiloft offers an on-premises option.
@@ -451,6 +451,8 @@ Compared with five contract lifecycle management products: Ironclad, DocuSign CL
 
 ### ✅ Recently shipped
 
+- [x] **0.12.0.** Contracts signed before created signed with their copy, in bulk through the Signed copies page and the
+  import; obligations imported from a sheet.
 - [x] **0.11.0.** Amendments applied once on their day, contracts under a master agreement, orders naming their contract.
 - [x] **0.10.0.** Obligations that repeat, made once each, and evidence before Done.
 - [x] **0.9.0.** Requests from a form: who asked, the Requests queue, Take It, Withdraw It, and the requester told.
@@ -487,7 +489,6 @@ Compared with five contract lifecycle management products: Ironclad, DocuSign CL
 **Repository and search**
 - [ ] Search inside the text of an uploaded PDF.
 - [ ] Contract read by AI: parties, dates, value and clauses proposed into the fields.
-- [ ] Bulk import of existing files with their metadata.
 
 **Term and termination**
 - [ ] A renewal task and a notice-sent step before the notice date passes.

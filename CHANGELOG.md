@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.12.0
+
+Needs the same platform as 0.11.0. The `contracts` package is 0.10.0: Contract gains Signed Copy (Uploaded), Signed By
+and Signed On (Recorded); Contract Manager and Legal may import obligations. `ui/dist` rebuilt with Ferrum-Frontend
+`5e2661f`.
+
+- **Created signed.** A create with the three fields, by a Contract Approver, Legal or an administrator, makes the
+  contract Signed: its copy (the creator's own loose upload) is attached to it in the same transaction, marked signed
+  elsewhere with who and when. A refused create keeps no file on any contract; one file goes on one contract; the
+  three fields cannot be set later or by the system (a form). The platform's import does the rest, row by row.
+- **Signed copies** (`/contracts/signed-copies`): upload many signed PDFs and download a sheet, one row per file, to
+  complete and import.
+- Record Signed Copy has its contract.
+
 ## 0.11.0
 
 Needs the same platform as 0.10.0. Packages: `contracts` 0.9.0 (Contract gains Amends, Amendment No, Applied On,
